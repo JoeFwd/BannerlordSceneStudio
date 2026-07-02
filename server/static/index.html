@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Bannerlord Navmesh Studio</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #ddd; overflow: hidden; }
+  #panel { position: absolute; top: 0; left: 0; width: 320px; padding: 12px; background: #1b1b1bee;
+           height: 100vh; box-sizing: border-box; overflow-y: auto; z-index: 2; font-size: 13px; }
+  #panel h2 { margin: 0 0 8px; font-size: 15px; }
+  #panel label { display: block; margin-top: 6px; color: #aaa; }
+  #panel input { width: 100%; box-sizing: border-box; background: #2a2a2a; color: #eee;
+                 border: 1px solid #444; border-radius: 4px; padding: 5px; }
+  #panel button { margin-top: 8px; margin-right: 4px; background: #2d6cdf; color: white; border: 0;
+                  border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+  #panel button.warn { background: #b0413e; }
+  #panel button.dim  { background: #444; }
+  #stats, #selinfo { white-space: pre-wrap; font-family: monospace; font-size: 12px; color: #9fd49f;
+                     margin-top: 8px; }
+  #selinfo { color: #d4c99f; }
+  canvas { display: block; }
+  #hint { position: absolute; bottom: 8px; right: 12px; color: #777; font-size: 12px; z-index: 2; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h2>Bannerlord Navmesh Studio</h2>
+  <label>Scene directory</label>
+  <input id="sceneDir" value=""/>
+  <button onclick="loadScene()">Load scene</button>
+  <div id="stats">no scene loaded</div>
+  <hr style="border-color:#333"/>
+  <b>Generate from terrain</b>
+  <label>Cell size (m)</label><input id="cellSize" value="4"/>
+  <label>Max slope (deg)</label><input id="maxSlope" value="40"/>
+  <label>Region min_x,min_y,max_x,max_y (blank = whole map)</label>
+  <input id="region" placeholder="900,1000,1100,1200"/>
+  <button onclick="genMesh(true)">Generate (replace)</button>
+  <button class="dim" onclick="genMesh(false)">Append</button>
+  <hr style="border-color:#333"/>
+  <b>Selection</b> <span style="color:#777">(click face; shift = multi)</span>
+  <div id="selinfo">none</div>
+  <label>Face id (g3)</label><input id="faceId" value="0"/>
+  <label>Group (g5)</label><input id="group" value="-1"/>
+  <button onclick="applyAttrs()">Apply to selection</button>
+  <button class="warn" onclick="deleteSel()">Delete selection</button>
+  <hr style="border-color:#333"/>
+  <button onclick="saveMesh()">Save navmesh.bin</button>
+  <button class="dim" onclick="toggleTerrain()">Toggle terrain</button>
+  <div id="msg" style="margin-top:8px;color:#8fb7ff"></div>
+</div>
+<div id="hint">drag = orbit &middot; wheel = zoom &middot; right-drag = pan</div>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x151515);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.5, 20000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(1, 2, 1); scene.add(sun);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Bannerlord is Z-up; three.js is Y-up. World (x,y,z) -> three (x, z, -y).
+const W2T = (x, y, z) => [x, z, -y];
+
+let terrainMesh = null, navMesh = null, navEdges = null;
+let faces = [], triToFace = [], selection = new Set();
+let colorAttr = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) } : undefined);
+  if (!r.ok) { const t = await r.text(); msg('ERROR: ' + t); throw new Error(t); }
+  return r.json();
+}
+const msg = t => document.getElementById('msg').textContent = t;
+
+function showStats(info) {
+  const s = info.navmesh;
+  let txt = `scene: ${info.scene_dir}\nfaces: ${s.faces}  verts: ${s.vertices}  edges: ${s.edges}`;
+  if (info.terrain) txt += `\nterrain: ${info.terrain.world_size_x}x${info.terrain.world_size_y} m`;
+  txt += info.dirty ? '\n[UNSAVED CHANGES]' : '';
+  document.getElementById('stats').textContent = txt;
+}
+
+async function drawTerrain() {
+  const t = await api('/api/terrain?max_dim=256');
+  if (terrainMesh) { scene.remove(terrainMesh); terrainMesh = null; }
+  if (!t.rows) return;
+  const geo = new THREE.PlaneGeometry(t.world_size_x, t.world_size_y, t.cols - 1, t.rows - 1);
+  // PlaneGeometry lies in XY; rows follow +y. Rotate to Z-up world then to three-space.
+  const pos = geo.attributes.position;
+  const cols = t.cols, rows = t.rows;
+  const colors = new Float32Array(pos.count * 3);
+  let hmin = Infinity, hmax = -Infinity;
+  for (const h of t.heights) { if (h < hmin) hmin = h; if (h > hmax) hmax = h; }
+  for (let i = 0; i < pos.count; i++) {
+    const col = i % cols, row = (i / cols) | 0;
+    const wx = col / (cols - 1) * t.world_size_x;
+    const wy = row / (rows - 1) * t.world_size_y;
+    const h = t.heights[row * cols + col];
+    const [X, Y, Z] = W2T(wx, wy, h);
+    pos.setXYZ(i, X, Y, Z);
+    const f = (h - hmin) / Math.max(1e-6, hmax - hmin);
+    colors[i*3] = 0.15 + 0.25*f; colors[i*3+1] = 0.22 + 0.30*f; colors[i*3+2] = 0.15 + 0.20*f;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  terrainMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
+    vertexColors: true, side: THREE.DoubleSide }));
+  scene.add(terrainMesh);
+}
+
+function faceColor(i, out) {
+  if (selection.has(i)) { out.setRGB(1.0, 0.55, 0.1); return; }
+  const g = faces.group ? faces.group[i] : 0;
+  const hue = (((g % 12) + 12) % 12) / 12;
+  out.setHSL(0.55 + 0.35 * hue, 0.75, 0.55);
+}
+
+async function drawNavmesh() {
+  const m = await api('/api/mesh');
+  faces = m;
+  if (navMesh) { scene.remove(navMesh); navMesh = null; }
+  if (navEdges) { scene.remove(navEdges); navEdges = null; }
+  triToFace = [];
+  const tris = [];
+  for (let fi = 0; fi < m.faces.length; fi++) {
+    const ids = m.faces[fi];
+    for (let k = 2; k < ids.length; k++) {
+      tris.push(ids[0], ids[k-1], ids[k]);
+      triToFace.push(fi);
+    }
+  }
+  const pos = new Float32Array(tris.length * 3);
+  const col = new Float32Array(tris.length * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < tris.length; i++) {
+    const v = tris[i] * 3;
+    const [X, Y, Z] = W2T(m.vertices[v], m.vertices[v+1], m.vertices[v+2] + 0.15);
+    pos[i*3] = X; pos[i*3+1] = Y; pos[i*3+2] = Z;
+    faceColor(triToFace[(i / 3) | 0], c);
+    col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  colorAttr = geo.attributes.color;
+  navMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+    depthWrite: false }));
+  scene.add(navMesh);
+  navEdges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
+    new THREE.LineBasicMaterial({ color: 0x224466, transparent: true, opacity: 0.6 }));
+  scene.add(navEdges);
+
+  if (m.vertices.length) {
+    geo.computeBoundingSphere();
+    const bs = geo.boundingSphere;
+    controls.target.copy(bs.center);
+    camera.position.set(bs.center.x + bs.radius, bs.center.y + bs.radius * 0.9,
+                        bs.center.z + bs.radius);
+    controls.update();
+  }
+}
+
+function repaint() {
+  if (!colorAttr) return;
+  const c = new THREE.Color();
+  for (let t = 0; t < triToFace.length; t++) {
+    faceColor(triToFace[t], c);
+    for (let k = 0; k < 3; k++) {
+      const i = t * 3 + k;
+      colorAttr.array[i*3] = c.r; colorAttr.array[i*3+1] = c.g; colorAttr.array[i*3+2] = c.b;
+    }
+  }
+  colorAttr.needsUpdate = true;
+}
+
+function updateSelInfo() {
+  const el = document.getElementById('selinfo');
+  if (!selection.size) { el.textContent = 'none'; return; }
+  const arr = [...selection];
+  const first = arr[0];
+  el.textContent = `${arr.length} face(s): [${arr.slice(0, 12).join(', ')}${arr.length > 12 ? '…' : ''}]`
+    + (faces.face_id ? `\nface_id=${faces.face_id[first]} group=${faces.group[first]}` : '');
+}
+
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => downAt = [e.clientX, e.clientY]);
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || !navMesh) return;
+  mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObject(navMesh)[0];
+  if (!hit) { if (!e.shiftKey) { selection.clear(); repaint(); updateSelInfo(); } return; }
+  const fi = triToFace[hit.faceIndex];
+  if (!e.shiftKey) selection.clear();
+  selection.has(fi) ? selection.delete(fi) : selection.add(fi);
+  repaint(); updateSelInfo();
+});
+
+window.loadScene = async () => {
+  msg('loading…');
+  const info = await api('/api/load', { scene_dir: document.getElementById('sceneDir').value });
+  showStats(info); selection.clear(); updateSelInfo();
+  await drawTerrain(); await drawNavmesh();
+  msg('loaded');
+};
+window.genMesh = async (replace) => {
+  msg('generating…');
+  const body = {
+    cell_size: parseFloat(document.getElementById('cellSize').value),
+    max_slope_deg: parseFloat(document.getElementById('maxSlope').value),
+    replace,
+  };
+  const r = document.getElementById('region').value.trim();
+  if (r) {
+    const [a, b, c2, d] = r.split(',').map(parseFloat);
+    Object.assign(body, { min_x: a, min_y: b, max_x: c2, max_y: d });
+  }
+  const info = await api('/api/generate', body);
+  showStats(info); selection.clear(); updateSelInfo();
+  await drawNavmesh(); msg('generated');
+};
+window.applyAttrs = async () => {
+  if (!selection.size) return msg('nothing selected');
+  await api('/api/set_attrs', { indices: [...selection],
+    face_id: parseInt(document.getElementById('faceId').value),
+    group: parseInt(document.getElementById('group').value) });
+  await drawNavmesh(); msg('attributes applied'); updateSelInfo();
+};
+window.deleteSel = async () => {
+  if (!selection.size) return msg('nothing selected');
+  const info = await api('/api/delete_faces', { indices: [...selection] });
+  selection.clear(); showStats(info); updateSelInfo();
+  await drawNavmesh(); msg('deleted');
+};
+window.saveMesh = async () => {
+  const r = await api('/api/save', {});
+  msg('saved: ' + r.path);
+  showStats(await api('/api/info'));
+};
+window.toggleTerrain = () => { if (terrainMesh) terrainMesh.visible = !terrainMesh.visible; };
+
+(async () => {
+  try {
+    const info = await api('/api/info');
+    document.getElementById('sceneDir').value = info.scene_dir;
+    showStats(info); await drawTerrain(); await drawNavmesh();
+  } catch { /* no scene preloaded */ }
+})();
+
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
