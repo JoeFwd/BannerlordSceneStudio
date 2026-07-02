@@ -9,6 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import os
+import subprocess
+
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -25,6 +28,34 @@ STATIC = Path(__file__).parent / "static"
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+_PICKER = (
+    "import sys, tkinter as tk\n"
+    "from tkinter import filedialog\n"
+    "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
+    "print(filedialog.askdirectory(title='Select Bannerlord scene directory',"
+    " initialdir=sys.argv[1]) or '')\n"
+)
+
+_MODULES_DIR = r"D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord\Modules"
+
+
+@app.get("/api/browse")
+def api_browse():
+    """Open a native folder picker on the machine running the server."""
+    initial = _MODULES_DIR if os.path.isdir(_MODULES_DIR) else os.path.expanduser("~")
+    try:
+        if state._current is not None:
+            initial = os.path.dirname(state._current.scene_dir)
+    except Exception:
+        pass
+    r = subprocess.run(
+        [sys.executable, "-c", _PICKER, initial],
+        capture_output=True, text=True, timeout=600,
+    )
+    path = r.stdout.strip()
+    return {"path": path or None}
 
 
 class LoadReq(BaseModel):

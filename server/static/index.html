@@ -27,7 +27,8 @@
   <h2>Bannerlord Navmesh Studio</h2>
   <label>Scene directory</label>
   <input id="sceneDir" value=""/>
-  <button onclick="loadScene()">Load scene</button>
+  <button onclick="browseDir()">Browse&hellip;</button>
+  <button class="dim" onclick="loadScene()">Load scene</button>
   <div id="stats">no scene loaded</div>
   <hr style="border-color:#333"/>
   <b>Generate from terrain</b>
@@ -215,6 +216,13 @@ renderer.domElement.addEventListener('pointerup', e => {
   repaint(); updateSelInfo();
 });
 
+window.browseDir = async () => {
+  msg('pick a folder in the dialog (check the taskbar)…');
+  const r = await api('/api/browse');
+  if (!r.path) { msg('folder selection cancelled'); return; }
+  document.getElementById('sceneDir').value = r.path;
+  await loadScene();
+};
 window.loadScene = async () => {
   msg('loading…');
   const info = await api('/api/load', { scene_dir: document.getElementById('sceneDir').value });
