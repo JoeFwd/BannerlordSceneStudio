@@ -1,0 +1,16 @@
+[project]
+name = "bannerlord-navmesh-studio"
+version = "0.1.0"
+description = "Read, edit, generate and write Mount & Blade II: Bannerlord navigation meshes (navmesh.bin) with a GUI viewer and MCP server for LLM-driven editing"
+requires-python = ">=3.11"
+dependencies = [
+    "lz4",
+    "numpy",
+    "pillow",
+    "fastmcp",
+    "fastapi",
+    "uvicorn",
+]
+
+[tool.setuptools]
+packages = ["blnav"]
