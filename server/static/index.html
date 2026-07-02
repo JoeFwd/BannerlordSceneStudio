@@ -20,6 +20,14 @@
   #selinfo { color: #d4c99f; }
   canvas { display: block; }
   #hint { position: absolute; bottom: 8px; right: 12px; color: #777; font-size: 12px; z-index: 2; }
+  #tip { position: absolute; display: none; background: #000c; color: #ffe9c9; padding: 3px 7px;
+         border-radius: 4px; font: 12px monospace; pointer-events: none; z-index: 3; }
+  #panel select { width: 100%; margin-top: 2px; background: #2a2a2a; color: #eee;
+                  border: 1px solid #444; border-radius: 4px; padding: 5px; }
+  .leg { display: flex; align-items: center; gap: 6px; margin-top: 3px;
+         font-family: monospace; font-size: 12px; }
+  .sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block;
+        border: 1px solid #0006; flex: none; }
 </style>
 </head>
 <body>
@@ -30,6 +38,12 @@
   <button onclick="browseDir()">Browse&hellip;</button>
   <button class="dim" onclick="loadScene()">Load scene</button>
   <div id="stats">no scene loaded</div>
+  <label>Colour by</label>
+  <select id="colorMode" onchange="setColorMode(this.value)">
+    <option value="terrain">terrain type / face id (g3)</option>
+    <option value="island">island (g5)</option>
+  </select>
+  <div id="legend"></div>
   <hr style="border-color:#333"/>
   <b>Generate from terrain</b>
   <label>Cell size (m)</label><input id="cellSize" value="4"/>
@@ -41,8 +55,8 @@
   <hr style="border-color:#333"/>
   <b>Selection</b> <span style="color:#777">(click face; shift = multi)</span>
   <div id="selinfo">none</div>
-  <label>Face id (g3)</label><input id="faceId" value="0"/>
-  <label>Group (g5)</label><input id="group" value="-1"/>
+  <label>Face id / terrain type (g3)</label><input id="faceId" value="0"/>
+  <label>Island (g5)</label><input id="group" value="-1"/>
   <button onclick="applyAttrs()">Apply to selection</button>
   <button class="warn" onclick="deleteSel()">Delete selection</button>
   <hr style="border-color:#333"/>
@@ -51,6 +65,7 @@
   <div id="msg" style="margin-top:8px;color:#8fb7ff"></div>
 </div>
 <div id="hint">drag = orbit &middot; wheel = zoom &middot; right-drag = pan</div>
+<div id="tip"></div>
 <script type="importmap">
 { "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -96,7 +111,26 @@ function showStats(info) {
   if (info.terrain) txt += `\nterrain: ${info.terrain.world_size_x}x${info.terrain.world_size_y} m`;
   txt += info.dirty ? '\n[UNSAVED CHANGES]' : '';
   document.getElementById('stats').textContent = txt;
+  // Campaign map scenes must be named Main_map; g3 is a TerrainType there.
+  isCampaign = info.scene_dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop().toLowerCase() === 'main_map';
 }
+
+// TaleWorlds.Core.TerrainType — campaign map navmesh face group ids (g3).
+const TERRAIN = {
+  0:  ['(unset)',           '#777777'], 1:  ['Plain',    '#7bb661'],
+  2:  ['Desert',            '#d9c27a'], 3:  ['Snow',     '#eef2f5'],
+  4:  ['Forest',            '#2e6b2e'], 5:  ['Steppe',   '#b5b35c'],
+  6:  ['Fording',           '#7ec8d4'], 7:  ['Mountain', '#8a8a92'],
+  8:  ['Lake',              '#3f7fbf'], 10: ['Water',    '#2c5fa8'],
+  11: ['River',             '#4f8fd0'], 13: ['Canyon',   '#a0653b'],
+  14: ['RuralArea',         '#e0954f'], 15: ['Swamp',    '#5d7a4c'],
+  16: ['Dune',              '#e3cd8f'], 17: ['Bridge',   '#9c7b5a'],
+  18: ['CoastalSea',        '#2a4f8f'], 19: ['OpenSea',  '#1c3a70'],
+  20: ['Beach',             '#e8d9a0'], 21: ['Cliff',    '#5a5a60'],
+  22: ['NonNavigableRiver', '#6fa3c8'], 23: ['LandRestriction', '#b04040'],
+  24: ['SeaRestriction',    '#703070'], 25: ['UnderBridge',     '#77808a'],
+};
+let isCampaign = false, colorMode = 'terrain';
 
 async function drawTerrain() {
   const t = await api('/api/terrain?max_dim=256');
@@ -126,11 +160,38 @@ async function drawTerrain() {
   scene.add(terrainMesh);
 }
 
-function faceColor(i, out) {
-  if (selection.has(i)) { out.setRGB(1.0, 0.55, 0.1); return; }
-  const g = faces.group ? faces.group[i] : 0;
-  const hue = (((g % 12) + 12) % 12) / 12;
+function keyColor(k, out) {
+  if (colorMode === 'terrain' && isCampaign && TERRAIN[k]) { out.set(TERRAIN[k][1]); return; }
+  const hue = (((k % 12) + 12) % 12) / 12;
   out.setHSL(0.55 + 0.35 * hue, 0.75, 0.55);
+}
+
+function faceColor(i, out) {
+  if (selection.has(i)) { out.setRGB(1.0, 0.15, 0.75); return; }
+  if (!faces.face_id) { out.setRGB(0.3, 0.5, 0.8); return; }
+  keyColor(colorMode === 'island' ? faces.group[i] : faces.face_id[i], out);
+}
+
+function faceLabel(i) {
+  const id = faces.face_id[i];
+  const name = isCampaign && TERRAIN[id] ? ` (${TERRAIN[id][0]})` : '';
+  return `face #${i} · id ${id}${name} · island ${faces.group[i]}`;
+}
+
+function buildLegend() {
+  const el = document.getElementById('legend');
+  if (!faces.face_id) { el.innerHTML = ''; return; }
+  const vals = colorMode === 'island' ? faces.group : faces.face_id;
+  const counts = new Map();
+  for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
+  const c = new THREE.Color();
+  el.innerHTML = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, n]) => {
+    keyColor(k, c);
+    const name = colorMode === 'terrain' && isCampaign && TERRAIN[k]
+      ? `${TERRAIN[k][0]} (${k})` : `${k}`;
+    return `<div class="leg"><span class="sw" style="background:#${c.getHexString()}"></span>`
+      + `${name} &times; ${n}</div>`;
+  }).join('') + (counts.size > 24 ? '<div class="leg">…</div>' : '');
 }
 
 async function drawNavmesh() {
@@ -168,6 +229,7 @@ async function drawNavmesh() {
   navEdges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
     new THREE.LineBasicMaterial({ color: 0x224466, transparent: true, opacity: 0.6 }));
   scene.add(navEdges);
+  buildLegend();
 
   if (m.vertices.length) {
     geo.computeBoundingSphere();
@@ -196,12 +258,27 @@ function updateSelInfo() {
   const el = document.getElementById('selinfo');
   if (!selection.size) { el.textContent = 'none'; return; }
   const arr = [...selection];
-  const first = arr[0];
   el.textContent = `${arr.length} face(s): [${arr.slice(0, 12).join(', ')}${arr.length > 12 ? '…' : ''}]`
-    + (faces.face_id ? `\nface_id=${faces.face_id[first]} group=${faces.group[first]}` : '');
+    + (faces.face_id ? `\n${faceLabel(arr[0])}` : '');
 }
 
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+const tip = document.getElementById('tip');
+let lastHover = 0;
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!navMesh || !faces.face_id) { tip.style.display = 'none'; return; }
+  const now = performance.now();
+  if (now - lastHover < 30) return;
+  lastHover = now;
+  mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObject(navMesh)[0];
+  if (!hit) { tip.style.display = 'none'; return; }
+  tip.textContent = faceLabel(triToFace[hit.faceIndex]);
+  tip.style.display = 'block';
+  tip.style.left = (e.clientX + 14) + 'px';
+  tip.style.top = (e.clientY + 10) + 'px';
+});
 let downAt = null;
 renderer.domElement.addEventListener('pointerdown', e => downAt = [e.clientX, e.clientY]);
 renderer.domElement.addEventListener('pointerup', e => {
@@ -265,6 +342,7 @@ window.saveMesh = async () => {
   showStats(await api('/api/info'));
 };
 window.toggleTerrain = () => { if (terrainMesh) terrainMesh.visible = !terrainMesh.visible; };
+window.setColorMode = v => { colorMode = v; repaint(); buildLegend(); };
 
 (async () => {
   try {
