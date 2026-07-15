@@ -33,7 +33,7 @@ import numpy as np
 
 from blscene.xscene import Scene
 from blscene.prefabs import PrefabCatalog
-from blnav.terrain_write import generate_terrain, write_terrain
+from blnav.terrain_write import generate_terrain, write_terrain, node_layer_usage
 from blnav import rnm1
 from blnav.generate import from_heightmap
 
@@ -163,6 +163,7 @@ def _rebuild_terrain_nodes(
     heights: np.ndarray,
     node_dim: tuple[int, int],
     node_size: float,
+    node_usage: dict[tuple[int, int], list[int]] | None = None,
 ) -> None:
     """Regenerate <terrain><nodes> records to match the generated terrain.
 
@@ -171,8 +172,27 @@ def _rebuild_terrain_nodes(
     257-px nodes).  The engine sizes and strides its height/weight buffers
     from these records, so stale values from a 257-px template make it index
     our 129-px data out of bounds and crash at scene load.
+
+    Per-node layer texturing (decoded from native battle_terrain_015/025/026/O
+    /biome_022/085):
+      * ``layer_is_used_mask_{summer,fall,winter,spring}`` is a bitmask where
+        bit b is set iff layer b is used in that node.  Natives set it to exactly
+        the WGHT-present slot set (minus seasonal-only layers).  We use the same
+        mask for all four seasons since our generator layers are not seasonal.
+      * ``weightmap_levels``: all 16 slots get ``heightmap_level`` — the pattern
+        native 129-res scenes use (battle_terrain_015/026/J/018 pad all 16; no
+        native ever sets fewer entries than its layer-def count).  Writing levels
+        only for the used layers crashed the loader (AV at Native+0x441700) once
+        a mask bit activated a layer path: the level is declarative per-slot
+        capacity, not a mask of what data is present.
+
+    *node_usage* maps (idx, idy) -> sorted list of used layer indices.  When None
+    the single-layer default ([0] everywhere) is used.
     """
     nx, ny = node_dim
+    if node_usage is None:
+        node_usage = {(idx, idy): [0] for idx in range(nx) for idy in range(ny)}
+
     nodes_elem = terrain_elem.find("nodes")
     if nodes_elem is None:
         nodes_elem = ET.SubElement(terrain_elem, "nodes")
@@ -184,15 +204,20 @@ def _rebuild_terrain_nodes(
         for idy in range(ny):
             tile = heights[idy * 128 : idy * 128 + 129, idx * 128 : idx * 128 + 129]
             tmin, tmax = float(tile.min()), float(tile.max())
+            used = node_usage.get((idx, idy), [0])
+            mask = 0
+            for layer in used:
+                mask |= (1 << layer)
             node = ET.SubElement(nodes_elem, "node", {
                 "idx": str(idx),
                 "idy": str(idy),
                 "occluders_enabled": "true",
-                # single terrain layer (bit 0) in every season
-                "layer_is_used_mask_summer": "1",
-                "layer_is_used_mask_fall": "1",
-                "layer_is_used_mask_winter": "1",
-                "layer_is_used_mask_spring": "1",
+                # per-node layer-usage bitmask (same for all seasons: our layers
+                # are not seasonal). bit b set iff layer b used in this node.
+                "layer_is_used_mask_summer": str(mask),
+                "layer_is_used_mask_fall": str(mask),
+                "layer_is_used_mask_winter": str(mask),
+                "layer_is_used_mask_spring": str(mask),
                 "layer_is_used_mask": "true",
                 "height_complexity": "%.3f" % ((tmax - tmin) / node_size),
                 "min_height": "%.3f" % tmin,
@@ -216,8 +241,8 @@ def _rebuild_terrain_nodes(
             for layer in range(16):
                 lv = ET.SubElement(wl, "variable", {
                     "layer": str(layer),
-                    # weightmap present only for layer 0
-                    "value": str(_HEIGHTMAP_LEVEL if layer == 0 else 0),
+                    # declarative per-slot capacity: natives pad all 16 at 129-res
+                    "value": str(_HEIGHTMAP_LEVEL),
                 })
                 lv.tail = "\n\t\t\t\t\t\t"
             lv.tail = "\n\t\t\t\t\t"
@@ -245,6 +270,7 @@ class SceneBuilder:
         min_height: float | None = None,
         max_height: float | None = None,
         terrain_dirty: bool = False,
+        layer_weights: dict[int, np.ndarray] | None = None,
     ) -> None:
         self._name = name
         self._scene = scene
@@ -254,6 +280,7 @@ class SceneBuilder:
         self._min_height = min_height
         self._max_height = max_height
         self._terrain_dirty = terrain_dirty  # False = copy source terrain.bin
+        self._layer_weights = layer_weights  # None = single-layer (uniform layer 0)
 
     # ------------------------------------------------------------------
     # Factories
@@ -286,6 +313,7 @@ class SceneBuilder:
             r"D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord"
             r"\Modules\SandBoxCore\SceneObj\battle_terrain_a"
         ),
+        layer_weights: dict[int, np.ndarray] | None = None,
     ) -> "SceneBuilder":
         """Create a battle scene from a heightmap.
 
@@ -300,6 +328,10 @@ class SceneBuilder:
                 [0, world_size_y].  Shape must be (ny*128+1, nx*128+1).
             node_size: terrain node size in metres (default 200).
             template_dir: path to the battle_terrain_a SceneObj folder.
+            layer_weights: optional {layer_index: full-map weight array} for
+                multi-layer terrain texturing.  Each array matches *heights*
+                shape.  Layer 0 defaults to the base.  Referenced layer indices
+                must exist in the template's <layers> list.  None = single layer 0.
         """
         heights = np.asarray(heights, dtype=np.float32)
         H, W = heights.shape
@@ -332,8 +364,9 @@ class SceneBuilder:
         terrain_elem.set("min_height", "%.3f" % min_height)
         terrain_elem.set("max_height", "%.3f" % max_height)
 
-        # --- Rebuild per-node records (height bounds, texture levels) ---
-        _rebuild_terrain_nodes(terrain_elem, heights, node_dim, node_size)
+        # --- Rebuild per-node records (height bounds, texture levels, masks) ---
+        node_usage = node_layer_usage(layer_weights, heights.shape, node_dim)
+        _rebuild_terrain_nodes(terrain_elem, heights, node_dim, node_size, node_usage)
 
         # Also update scene name
         scene._root.set("name", name)
@@ -372,6 +405,7 @@ class SceneBuilder:
             min_height=min_height,
             max_height=max_height,
             terrain_dirty=True,
+            layer_weights=layer_weights,
         )
 
     # ------------------------------------------------------------------
@@ -479,6 +513,7 @@ class SceneBuilder:
                 node_dim=(nx, ny),
                 min_height=self._min_height,
                 max_height=self._max_height,
+                layer_weights=self._layer_weights,
             )
             write_terrain(terrain, terrain_path)
         else:

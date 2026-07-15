@@ -359,3 +359,95 @@ class TestAddWithCatalog:
         assert added.position is not None
         assert abs(added.position[0] - pos[0]) < 0.01
         assert abs(added.position[1] - pos[1]) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# (e) Multi-layer terrain texturing: xscene masks + weightmap_levels
+# ---------------------------------------------------------------------------
+
+def _node_records(scene_dir):
+    """Return {(idx, idy): node_element} from a built scene's xscene <terrain><nodes>."""
+    import xml.etree.ElementTree as ET
+    root = ET.parse(str(Path(scene_dir) / "scene.xscene")).getroot()
+    out = {}
+    for n in root.find("terrain").find("nodes").findall("node"):
+        out[(int(n.get("idx")), int(n.get("idy")))] = n
+    return out
+
+
+def _weightmap_levels(node):
+    tl = node.find("texture_levels")
+    wm = next(v for v in tl.findall("variable") if v.get("name") == "weightmap_levels")
+    return [int(c.get("value")) for c in wm.findall("variable")]
+
+
+class TestMultiLayerXscene:
+    def test_single_layer_masks_and_levels_unchanged(self, tmp_path):
+        """Default (no layer_weights): every node mask == 1, weightmap_levels == [7]*16."""
+        heights = _make_rolling_heights()
+        builder = SceneBuilder.new_battle(
+            "ml_single", heights, node_size=_NODE_SIZE, template_dir=BATTLE_TEMPLATE)
+        scene_dir = builder.build(str(tmp_path))
+        for (idx, idy), node in _node_records(scene_dir).items():
+            for season in ("summer", "fall", "winter", "spring"):
+                assert node.get(f"layer_is_used_mask_{season}") == "1"
+            wl = _weightmap_levels(node)
+            assert wl == [7] * 16
+
+    def test_two_layer_split_masks_and_levels(self, tmp_path):
+        """Rock band over cols [200,500): base-only, straddling, and rock-only nodes.
+
+        Column idx maps to sample cols [idx*128, idx*128+129]:
+          idx=0 [0,129]    → base only             → mask 1
+          idx=1 [128,257]  → straddles rock edge   → base + rock → mask 3
+          idx=2 [256,385]  → fully rock            → mask 2 (base weight 0 there)
+        """
+        heights = _make_rolling_heights()
+        rock = np.zeros((_H, _W), dtype=np.float32)
+        rock[:, 200:500] = 1.0
+        builder = SceneBuilder.new_battle(
+            "ml_two", heights, node_size=_NODE_SIZE, template_dir=BATTLE_TEMPLATE,
+            layer_weights={1: rock})
+        scene_dir = builder.build(str(tmp_path))
+        nodes = _node_records(scene_dir)
+        # weightmap_levels: all 16 padded to heightmap_level (native 129-res rule)
+        for node in nodes.values():
+            assert _weightmap_levels(node) == [7] * 16
+        assert nodes[(0, 0)].get("layer_is_used_mask_summer") == "1"   # base only
+        assert nodes[(1, 0)].get("layer_is_used_mask_summer") == "3"   # base + rock
+        assert nodes[(2, 0)].get("layer_is_used_mask_summer") == "2"   # rock only
+        # all seasons carry the same mask
+        n = nodes[(1, 0)]
+        assert (n.get("layer_is_used_mask_summer") == n.get("layer_is_used_mask_winter")
+                == n.get("layer_is_used_mask_fall") == n.get("layer_is_used_mask_spring"))
+
+    def test_two_layer_terrain_bin_wght_present(self, tmp_path):
+        """WGHT-present slots in terrain.bin match the xscene mask bits for every node."""
+        heights = _make_rolling_heights()
+        rock = np.zeros((_H, _W), dtype=np.float32)
+        rock[:, 200:500] = 1.0
+        builder = SceneBuilder.new_battle(
+            "ml_bin", heights, node_size=_NODE_SIZE, template_dir=BATTLE_TEMPLATE,
+            layer_weights={1: rock})
+        scene_dir = builder.build(str(tmp_path))
+        t = Terrain.load(str(Path(scene_dir) / "terrain.bin"))
+        nodes = _node_records(scene_dir)
+
+        def wght_present(idx, idy):
+            blob = t.sections["WGHT"].node(idx + idy * _NX)  # row-major in the bin
+            off, present = 0, []
+            for slot in range(16):
+                (flag,) = struct.unpack_from("<I", blob, off)
+                off += 4
+                if flag == 1:
+                    (png_sz,) = struct.unpack_from("<I", blob, off)
+                    off += 4 + png_sz
+                    present.append(slot)
+            assert off == len(blob)
+            return present
+
+        for (idx, idy), node in nodes.items():
+            mask = int(node.get("layer_is_used_mask_summer"))
+            bits = [b for b in range(16) if mask & (1 << b)]
+            assert wght_present(idx, idy) == bits, f"node {(idx, idy)} slot/mask mismatch"
+        assert 1 in wght_present(1, 0)  # sanity: straddling node has rock

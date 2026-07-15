@@ -12,7 +12,12 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from blnav.terrain import Terrain
-from blnav.terrain_write import generate_terrain, write_terrain
+from blnav.terrain_write import generate_terrain, write_terrain, node_layer_usage
+
+BT015 = (
+    r"D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord"
+    r"\Modules\SandBoxCore\SceneObj\battle_terrain_015\terrain.bin"
+)
 
 VLANDIA = (
     r"D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord"
@@ -210,3 +215,131 @@ def test_generate_write_reload_internal_roundtrip_6x6(tmp_bin):
 def test_generate_wrong_shape_raises():
     with pytest.raises(ValueError, match="shape"):
         generate_terrain(np.zeros((10, 10), dtype=np.float32), node_dim=(2, 2))
+
+
+# ---------------------------------------------------------------------------
+# (c) Multi-layer WGHT / PHYM
+# ---------------------------------------------------------------------------
+
+def _walk_wght_slots(blob: bytes):
+    """Return {slot_index: L-mode np.ndarray} for present slots; assert 16 slots."""
+    off = 0
+    present = {}
+    for slot in range(16):
+        (flag,) = struct.unpack_from("<I", blob, off)
+        off += 4
+        if flag == 1:
+            (png_sz,) = struct.unpack_from("<I", blob, off)
+            off += 4
+            img = Image.open(io.BytesIO(blob[off : off + png_sz]))
+            off += png_sz
+            present[slot] = np.array(img)
+        elif flag != 0:
+            raise AssertionError(f"bad slot flag {flag}")
+    assert off == len(blob), f"WGHT walk consumed {off} of {len(blob)}"
+    return present
+
+
+def _phym_cells(blob: bytes) -> np.ndarray:
+    """Return (res, res, 4) uint8 cell array; assert zero 24B header."""
+    hdr0, cc = struct.unpack_from("<II", blob, 0)
+    assert hdr0 == 0
+    assert blob[8:32] == b"\x00" * 24, "PHYM 24B header expected all-zero"
+    res = int(round(cc ** 0.5))
+    return np.frombuffer(blob[32:], dtype=np.uint8).reshape(res, res, 4)
+
+
+def test_single_layer_default_wght_phym_unchanged(tmp_bin):
+    """layer_weights=None must reproduce the legacy uniform WGHT/PHYM bytes exactly."""
+    heights = _make_sloped_heights(2, 2)
+    legacy = generate_terrain(heights, node_dim=(2, 2), min_height=0.0, max_height=100.0)
+    explicit_none = generate_terrain(
+        heights, node_dim=(2, 2), min_height=0.0, max_height=100.0, layer_weights=None
+    )
+    for tag in ("WGHT", "PHYM"):
+        assert legacy.sections[tag].data == explicit_none.sections[tag].data
+        assert legacy.sections[tag].node_offsets == explicit_none.sections[tag].node_offsets
+    # WGHT node0: only slot 0 present; PHYM all cells 0
+    w = _walk_wght_slots(legacy.sections["WGHT"].node(0))
+    assert set(w.keys()) == {0}
+    assert (w[0] == 255).all()
+    cells = _phym_cells(legacy.sections["PHYM"].node(0))
+    assert (cells == 0).all()
+
+
+def test_multilayer_wght_slots_and_weights():
+    """Two-layer split: base-only node has slot 0; a straddling node has both slots.
+
+    Rock band over cols [50, 200) on a 2x2 grid (node cols [idx*128, idx*128+129]):
+      node 0 (idx=0) covers cols [0,129]   → straddles rock edges → both layers
+      node 1 (idx=1) covers cols [128,257] → beyond the band      → base only
+    """
+    nx = ny = 2
+    H, W = ny * 128 + 1, nx * 128 + 1
+    rock = np.zeros((H, W), dtype=np.float32)
+    rock[:, 50:200] = 1.0
+    heights = _make_flat_heights(nx, ny, 50.0)
+    t = generate_terrain(heights, node_dim=(nx, ny), min_height=0.0, max_height=100.0,
+                         layer_weights={1: rock})
+    w0 = _walk_wght_slots(t.sections["WGHT"].node(0))  # straddles → base + rock
+    w1 = _walk_wght_slots(t.sections["WGHT"].node(1))  # cols 128..256 in [50,200) partly
+    assert 0 in w0 and 1 in w0, "straddling node must have both base and rock slots"
+    # complementary: base + rock ≈ 255 everywhere in a node that has both
+    s = w0[0].astype(int) + w0[1].astype(int)
+    assert np.abs(s - 255).max() <= 1
+    # node 1 covers cols [128,257]; rock is 1 for cols<200, 0 for >=200 → both present
+    assert 0 in w1 and 1 in w1
+
+
+def test_multilayer_phym_uniform():
+    """Multi-layer output keeps PHYM uniform material 0 (non-uniform PHYM cell
+    encodings are engine-internal and crash the loader — see terrain_write)."""
+    nx = ny = 1
+    H, W = ny * 128 + 1, nx * 128 + 1
+    rock = np.zeros((H, W), dtype=np.float32)
+    rock[:, W // 2 :] = 1.0  # right half rock (layer 1), left half base (layer 0)
+    heights = _make_flat_heights(nx, ny, 50.0)
+    t = generate_terrain(heights, node_dim=(nx, ny), min_height=0.0, max_height=100.0,
+                         layer_weights={1: rock})
+    cells = _phym_cells(t.sections["PHYM"].node(0))
+    assert (cells == 0).all()
+
+
+def test_multilayer_uint8_weights_accepted():
+    """uint8 (0-255) weight arrays are scaled and produce the same slots as float."""
+    nx = ny = 1
+    H, W = ny * 128 + 1, nx * 128 + 1
+    rock_u8 = np.zeros((H, W), dtype=np.uint8)
+    rock_u8[:, W // 2 :] = 255
+    heights = _make_flat_heights(nx, ny, 50.0)
+    t = generate_terrain(heights, node_dim=(nx, ny), min_height=0.0, max_height=100.0,
+                         layer_weights={1: rock_u8})
+    w = _walk_wght_slots(t.sections["WGHT"].node(0))
+    assert set(w.keys()) == {0, 1}
+
+
+def test_node_layer_usage_single_and_multi():
+    nx = ny = 2
+    H, W = ny * 128 + 1, nx * 128 + 1
+    assert node_layer_usage(None, (H, W), (nx, ny)) == {
+        (0, 0): [0], (0, 1): [0], (1, 0): [0], (1, 1): [0]
+    }
+    # rock only in the far-right node column (idx=1 covers cols [128,257])
+    rock = np.zeros((H, W), dtype=np.float32)
+    rock[:, 200:] = 1.0
+    usage = node_layer_usage({1: rock}, (H, W), (nx, ny))
+    # idx=0 covers cols [0,129] (no rock) → base only
+    # idx=1 covers cols [128,257] → base + rock (right side fully rock so base=0
+    #   on the far edge but nonzero near col 128, so both present)
+    assert usage[(0, 0)] == [0]
+    assert usage[(1, 0)] == [0, 1]
+
+
+@pytest.mark.skipif(not Path(BT015).exists(), reason="battle_terrain_015 not available")
+def test_roundtrip_bt015_wght_phym_byte_identical():
+    """Reader→writer round-trip of native battle_terrain_015 WGHT+PHYM is byte-identical
+    at the decompressed-section level (compressed pointer garbage aside)."""
+    orig, reloaded = _roundtrip(BT015)
+    for tag in ("WGHT", "PHYM"):
+        assert orig.sections[tag].node_offsets == reloaded.sections[tag].node_offsets
+        assert orig.sections[tag].data == reloaded.sections[tag].data
