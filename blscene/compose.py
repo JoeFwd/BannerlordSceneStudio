@@ -281,6 +281,7 @@ class SceneBuilder:
         self._max_height = max_height
         self._terrain_dirty = terrain_dirty  # False = copy source terrain.bin
         self._layer_weights = layer_weights  # None = single-layer (uniform layer 0)
+        self._flora_records: list = []  # transplanted FloraRecords (blnav.flora)
 
     # ------------------------------------------------------------------
     # Factories
@@ -478,6 +479,15 @@ class SceneBuilder:
             new_elem.tail = "\n\t"
             children = list(ent_elem)
 
+    def add_flora(self, records: list) -> None:
+        """Register FloraRecords to be written into the scene's flora.bin.
+
+        Records accumulate across calls.  When any records are registered,
+        build() writes a fresh flora.bin from them instead of copying the
+        source scene's flora (which describes the source terrain, not ours).
+        """
+        self._flora_records.extend(records)
+
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
@@ -523,15 +533,21 @@ class SceneBuilder:
 
         # --- flora.bin ---
         flora_path = os.path.join(scene_dir, "flora.bin")
-        src_flora = os.path.join(self._source_dir, "flora.bin")
-        if os.path.exists(src_flora):
-            shutil.copy2(src_flora, flora_path)
+        if self._flora_records:
+            # Write transplanted flora (the source flora describes the source
+            # terrain, so it is not copied when we have our own records).
+            from blnav.flora import Flora
+            Flora(list(self._flora_records)).save(flora_path)
         else:
-            # 12-byte empty stub: "FLR2" + u32(4) + u32(0)
-            import struct
-            with open(flora_path, "wb") as fh:
-                fh.write(b"FLR2")
-                fh.write(struct.pack("<II", 4, 0))
+            src_flora = os.path.join(self._source_dir, "flora.bin")
+            if os.path.exists(src_flora):
+                shutil.copy2(src_flora, flora_path)
+            else:
+                # 12-byte empty stub: "FLR2" + u32(4) + u32(0)
+                import struct
+                with open(flora_path, "wb") as fh:
+                    fh.write(b"FLR2")
+                    fh.write(struct.pack("<II", 4, 0))
 
         # --- atmosphere.xml ---
         atm_path = os.path.join(scene_dir, "atmosphere.xml")
