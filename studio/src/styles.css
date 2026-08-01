@@ -1,0 +1,24 @@
+body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #ddd; overflow: hidden; }
+#panel { position: absolute; top: 0; left: 0; width: 320px; padding: 12px; background: #1b1b1bee;
+         height: 100vh; box-sizing: border-box; overflow-y: auto; z-index: 2; font-size: 13px; }
+#panel h2 { margin: 0 0 8px; font-size: 15px; }
+#panel label { display: block; margin-top: 6px; color: #aaa; }
+#panel input { width: 100%; box-sizing: border-box; background: #2a2a2a; color: #eee;
+               border: 1px solid #444; border-radius: 4px; padding: 5px; }
+#panel button { margin-top: 8px; margin-right: 4px; background: #2d6cdf; color: white; border: 0;
+                border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+#panel button.warn { background: #b0413e; }
+#panel button.dim  { background: #444; }
+#stats, #selinfo { white-space: pre-wrap; font-family: monospace; font-size: 12px; color: #9fd49f;
+                   margin-top: 8px; }
+#selinfo { color: #d4c99f; }
+canvas { display: block; }
+#hint { position: absolute; bottom: 8px; right: 12px; color: #777; font-size: 12px; z-index: 2; }
+#tip { position: absolute; display: none; background: #000c; color: #cfe0ff; padding: 3px 7px;
+       border-radius: 4px; font: 12px monospace; pointer-events: none; z-index: 3; }
+#panel select { width: 100%; margin-top: 2px; background: #2a2a2a; color: #eee;
+                border: 1px solid #444; border-radius: 4px; padding: 5px; }
+.leg { display: flex; align-items: center; gap: 6px; margin-top: 3px;
+       font-family: monospace; font-size: 12px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block;
+      border: 1px solid #0006; flex: none; }

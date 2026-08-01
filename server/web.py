@@ -32,15 +32,16 @@ from blnav.nmg9 import Face
 
 app = FastAPI(title="bannerlord-navmesh-studio")
 STATIC = Path(__file__).parent / "static"
+DIST = STATIC / "dist"   # built Vite (React + R3F) front-end, when present
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(DIST / "index.html")
 
 
-# Serve the front-end ES modules (index.html loads ./js/main.js and its siblings).
-app.mount("/js", StaticFiles(directory=STATIC / "js"), name="js")
+# Vite emits hashed bundles under dist/assets.
+app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 
 
 _PICKER = (
