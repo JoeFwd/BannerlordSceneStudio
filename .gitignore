@@ -3,4 +3,5 @@ __pycache__/
 tests/_tmp/
 *.egg-info/
 corpus.json
+corpus_terrain.npz
 bisect/

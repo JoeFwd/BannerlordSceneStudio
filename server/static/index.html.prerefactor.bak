@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Bannerlord Navmesh Studio</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #ddd; overflow: hidden; }
+  #panel { position: absolute; top: 0; left: 0; width: 320px; padding: 12px; background: #1b1b1bee;
+           height: 100vh; box-sizing: border-box; overflow-y: auto; z-index: 2; font-size: 13px; }
+  #panel h2 { margin: 0 0 8px; font-size: 15px; }
+  #panel label { display: block; margin-top: 6px; color: #aaa; }
+  #panel input { width: 100%; box-sizing: border-box; background: #2a2a2a; color: #eee;
+                 border: 1px solid #444; border-radius: 4px; padding: 5px; }
+  #panel button { margin-top: 8px; margin-right: 4px; background: #2d6cdf; color: white; border: 0;
+                  border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+  #panel button.warn { background: #b0413e; }
+  #panel button.dim  { background: #444; }
+  #stats, #selinfo { white-space: pre-wrap; font-family: monospace; font-size: 12px; color: #9fd49f;
+                     margin-top: 8px; }
+  #selinfo { color: #d4c99f; }
+  canvas { display: block; }
+  #hint { position: absolute; bottom: 8px; right: 12px; color: #777; font-size: 12px; z-index: 2; }
+  #tip { position: absolute; display: none; background: #000c; color: #ffe9c9; padding: 3px 7px;
+         border-radius: 4px; font: 12px monospace; pointer-events: none; z-index: 3; }
+  #panel select { width: 100%; margin-top: 2px; background: #2a2a2a; color: #eee;
+                  border: 1px solid #444; border-radius: 4px; padding: 5px; }
+  .leg { display: flex; align-items: center; gap: 6px; margin-top: 3px;
+         font-family: monospace; font-size: 12px; }
+  .sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block;
+        border: 1px solid #0006; flex: none; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h2>Bannerlord Navmesh Studio</h2>
+  <label>Scene directory</label>
+  <input id="sceneDir" value=""/>
+  <button onclick="browseDir()">Browse&hellip;</button>
+  <button class="dim" onclick="loadScene()">Load scene</button>
+  <div id="stats">no scene loaded</div>
+  <label>Colour by</label>
+  <select id="colorMode" onchange="setColorMode(this.value)">
+    <option value="terrain">terrain type / face id (g3)</option>
+    <option value="island">island (g5)</option>
+  </select>
+  <div id="legend"></div>
+  <hr style="border-color:#333"/>
+  <b>Generate from terrain</b>
+  <label>Cell size (m)</label><input id="cellSize" value="4"/>
+  <label>Max slope (deg)</label><input id="maxSlope" value="40"/>
+  <label>Region min_x,min_y,max_x,max_y (blank = whole map)</label>
+  <input id="region" placeholder="900,1000,1100,1200"/>
+  <button onclick="genMesh(true)">Generate (replace)</button>
+  <button class="dim" onclick="genMesh(false)">Append</button>
+  <hr style="border-color:#333"/>
+  <b>Selection</b> <span style="color:#777">(click face; shift = multi)</span>
+  <div id="selinfo">none</div>
+  <label>Face id / terrain type (g3)</label><input id="faceId" value="0"/>
+  <label>Island (g5)</label><input id="group" value="-1"/>
+  <button onclick="applyAttrs()">Apply to selection</button>
+  <button class="warn" onclick="deleteSel()">Delete selection</button>
+  <hr style="border-color:#333"/>
+  <button onclick="saveMesh()">Save navmesh.bin</button>
+  <button class="dim" onclick="toggleTerrain()">Toggle terrain</button>
+  <hr style="border-color:#333"/>
+  <b>Settlements</b> <span style="color:#777">(drag movable; click to select)</span>
+  <button class="dim" onclick="toggleEntities()">Show / hide</button>
+  <button class="dim" onclick="toggleLabels()">Labels</button>
+  <div id="entlegend">
+    <div class="leg"><span class="sw" style="background:#39d353"></span>zone on land (movable)</div>
+    <div class="leg"><span class="sw" style="background:#e6a23c"></span>zone partly on land (ok)</div>
+    <div class="leg"><span class="sw" style="background:#e5484d"></span>zone in water (movable)</div>
+    <div class="leg"><span class="sw" style="background:#6f7d9c"></span>reference (locked)</div>
+    <div class="leg">&#9650; town &nbsp; &#9724; castle &nbsp; &#9679; village</div>
+  </div>
+  <div id="entinfo" style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#d4c99f;margin-top:6px">no settlements</div>
+  <button id="saveEntBtn" onclick="saveEntities()">Save placements</button>
+  <button class="dim" onclick="resetMoves()">Reset moves</button>
+  <label>Footprint radius — town / castle (world units)</label>
+  <div style="display:flex;gap:4px">
+    <input id="townR" style="width:50%" placeholder="town"/>
+    <input id="castleR" style="width:50%" placeholder="castle"/>
+  </div>
+  <button class="dim" onclick="saveFootprint()">Set type radius</button>
+  <div id="selinfoEnt" style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#9fd4c9;margin-top:8px">no settlement selected</div>
+  <label>Selected settlement custom radius (blank = use type)</label>
+  <input id="customR" placeholder="custom radius"/>
+  <button class="dim" onclick="saveCustom()">Apply custom radius</button>
+  <div id="msg" style="margin-top:8px;color:#8fb7ff"></div>
+</div>
+<div id="hint">WASD/ZQSD or arrows = move &middot; drag = orbit &middot; wheel = zoom &middot; right-drag = pan</div>
+<div id="tip"></div>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x151515);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.5, 20000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.zoomSpeed = 2.0;   // faster wheel zoom
+let panRefDist = 800;   // pan speed reference (frozen full-view distance, not live zoom)
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(1, 2, 1); scene.add(sun);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Bannerlord is Z-up; three.js is Y-up. World (x,y,z) -> three (x, z, -y).
+const W2T = (x, y, z) => [x, z, -y];
+
+let terrainMesh = null, navMesh = null, navEdges = null;
+let faces = [], triToFace = [], selection = new Set();
+let colorAttr = null;
+
+// ---- settlement placement layer ----
+let entGroup = null, markerMeshes = [], labelSprites = [], waterLevel = 10.0;
+let markerDrag = false, dragEnt = null, dragMoved = false, overMarker = false, lastMove = 0;
+let movedCount = 0, selectedEnt = null, labelsOn = true;
+const MARK_LIFT = 2.0;
+const C_LAND = 0x39d353, C_PARTIAL = 0xe6a23c, C_WATER = 0xe5484d, C_REF = 0x6f7d9c;
+// Distinct symbol per settlement type (colour still encodes land/water/locked).
+const geoTown    = new THREE.ConeGeometry(2.6, 5.4, 4);        // 4-sided spire
+const geoCastle  = new THREE.CylinderGeometry(1.7, 2.4, 4.6, 6); // keep/tower
+const geoVillage = new THREE.SphereGeometry(1.7, 12, 8);
+const geoUnknown = new THREE.SphereGeometry(1.4, 10, 8);
+const geoForType = t => t === 'town' ? geoTown : t === 'castle' ? geoCastle
+  : t === 'village' ? geoVillage : geoUnknown;
+const FP_COL = { town: 0x2d6cdf, castle: 0xd08a2d };
+// Label text size by type: towns much larger, castles medium, villages baseline.
+const LABEL_SCALE = { town: 1.9, castle: 1.35, village: 1.0 };
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) } : undefined);
+  if (!r.ok) { const t = await r.text(); msg('ERROR: ' + t); throw new Error(t); }
+  return r.json();
+}
+const msg = t => document.getElementById('msg').textContent = t;
+
+function showStats(info) {
+  const s = info.navmesh;
+  let txt = `scene: ${info.scene_dir}\nfaces: ${s.faces}  verts: ${s.vertices}  edges: ${s.edges}`;
+  if (info.terrain) txt += `\nterrain: ${info.terrain.world_size_x}x${info.terrain.world_size_y} m`;
+  txt += info.dirty ? '\n[UNSAVED CHANGES]' : '';
+  document.getElementById('stats').textContent = txt;
+  // Campaign map scenes must be named Main_map; g3 is a TerrainType there.
+  isCampaign = info.scene_dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop().toLowerCase() === 'main_map';
+}
+
+// TaleWorlds.Core.TerrainType — campaign map navmesh face group ids (g3).
+const TERRAIN = {
+  0:  ['(unset)',           '#777777'], 1:  ['Plain',    '#7bb661'],
+  2:  ['Desert',            '#d9c27a'], 3:  ['Snow',     '#eef2f5'],
+  4:  ['Forest',            '#2e6b2e'], 5:  ['Steppe',   '#b5b35c'],
+  6:  ['Fording',           '#7ec8d4'], 7:  ['Mountain', '#8a8a92'],
+  8:  ['Lake',              '#3f7fbf'], 10: ['Water',    '#2c5fa8'],
+  11: ['River',             '#4f8fd0'], 13: ['Canyon',   '#a0653b'],
+  14: ['RuralArea',         '#e0954f'], 15: ['Swamp',    '#5d7a4c'],
+  16: ['Dune',              '#e3cd8f'], 17: ['Bridge',   '#9c7b5a'],
+  18: ['CoastalSea',        '#2a4f8f'], 19: ['OpenSea',  '#1c3a70'],
+  20: ['Beach',             '#e8d9a0'], 21: ['Cliff',    '#5a5a60'],
+  22: ['NonNavigableRiver', '#6fa3c8'], 23: ['LandRestriction', '#b04040'],
+  24: ['SeaRestriction',    '#703070'], 25: ['UnderBridge',     '#77808a'],
+};
+let isCampaign = false, colorMode = 'terrain';
+
+async function drawTerrain() {
+  const t = await api('/api/terrain?max_dim=256');
+  if (terrainMesh) { scene.remove(terrainMesh); terrainMesh = null; }
+  if (!t.rows) return;
+  const geo = new THREE.PlaneGeometry(t.world_size_x, t.world_size_y, t.cols - 1, t.rows - 1);
+  // PlaneGeometry lies in XY; rows follow +y. Rotate to Z-up world then to three-space.
+  const pos = geo.attributes.position;
+  const cols = t.cols, rows = t.rows;
+  const colors = new Float32Array(pos.count * 3);
+  let hmin = Infinity, hmax = -Infinity;
+  for (const h of t.heights) { if (h < hmin) hmin = h; if (h > hmax) hmax = h; }
+  for (let i = 0; i < pos.count; i++) {
+    const col = i % cols, row = (i / cols) | 0;
+    const wx = col / (cols - 1) * t.world_size_x;
+    const wy = row / (rows - 1) * t.world_size_y;
+    const h = t.heights[row * cols + col];
+    const [X, Y, Z] = W2T(wx, wy, h);
+    pos.setXYZ(i, X, Y, Z);
+    const f = (h - hmin) / Math.max(1e-6, hmax - hmin);
+    colors[i*3] = 0.15 + 0.25*f; colors[i*3+1] = 0.22 + 0.30*f; colors[i*3+2] = 0.15 + 0.20*f;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  terrainMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
+    vertexColors: true, side: THREE.DoubleSide }));
+  scene.add(terrainMesh);
+}
+
+function keyColor(k, out) {
+  if (colorMode === 'terrain' && isCampaign && TERRAIN[k]) { out.set(TERRAIN[k][1]); return; }
+  const hue = (((k % 12) + 12) % 12) / 12;
+  out.setHSL(0.55 + 0.35 * hue, 0.75, 0.55);
+}
+
+function faceColor(i, out) {
+  if (selection.has(i)) { out.setRGB(1.0, 0.15, 0.75); return; }
+  if (!faces.face_id) { out.setRGB(0.3, 0.5, 0.8); return; }
+  keyColor(colorMode === 'island' ? faces.group[i] : faces.face_id[i], out);
+}
+
+function faceLabel(i) {
+  const id = faces.face_id[i];
+  const name = isCampaign && TERRAIN[id] ? ` (${TERRAIN[id][0]})` : '';
+  return `face #${i} · id ${id}${name} · island ${faces.group[i]}`;
+}
+
+function buildLegend() {
+  const el = document.getElementById('legend');
+  if (!faces.face_id) { el.innerHTML = ''; return; }
+  const vals = colorMode === 'island' ? faces.group : faces.face_id;
+  const counts = new Map();
+  for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
+  const c = new THREE.Color();
+  el.innerHTML = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, n]) => {
+    keyColor(k, c);
+    const name = colorMode === 'terrain' && isCampaign && TERRAIN[k]
+      ? `${TERRAIN[k][0]} (${k})` : `${k}`;
+    return `<div class="leg"><span class="sw" style="background:#${c.getHexString()}"></span>`
+      + `${name} &times; ${n}</div>`;
+  }).join('') + (counts.size > 24 ? '<div class="leg">…</div>' : '');
+}
+
+async function drawNavmesh() {
+  const m = await api('/api/mesh');
+  faces = m;
+  if (navMesh) { scene.remove(navMesh); navMesh = null; }
+  if (navEdges) { scene.remove(navEdges); navEdges = null; }
+  triToFace = [];
+  const tris = [];
+  for (let fi = 0; fi < m.faces.length; fi++) {
+    const ids = m.faces[fi];
+    for (let k = 2; k < ids.length; k++) {
+      tris.push(ids[0], ids[k-1], ids[k]);
+      triToFace.push(fi);
+    }
+  }
+  const pos = new Float32Array(tris.length * 3);
+  const col = new Float32Array(tris.length * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < tris.length; i++) {
+    const v = tris[i] * 3;
+    const [X, Y, Z] = W2T(m.vertices[v], m.vertices[v+1], m.vertices[v+2] + 0.15);
+    pos[i*3] = X; pos[i*3+1] = Y; pos[i*3+2] = Z;
+    faceColor(triToFace[(i / 3) | 0], c);
+    col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  colorAttr = geo.attributes.color;
+  navMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+    depthWrite: false }));
+  scene.add(navMesh);
+  navEdges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
+    new THREE.LineBasicMaterial({ color: 0x224466, transparent: true, opacity: 0.6 }));
+  scene.add(navEdges);
+  buildLegend();
+
+  if (m.vertices.length) {
+    geo.computeBoundingSphere();
+    const bs = geo.boundingSphere;
+    controls.target.copy(bs.center);
+    camera.position.set(bs.center.x + bs.radius, bs.center.y + bs.radius * 0.9,
+                        bs.center.z + bs.radius);
+    controls.update();
+    panRefDist = camera.position.distanceTo(controls.target);   // freeze full-view pan speed
+  }
+}
+
+function repaint() {
+  if (!colorAttr) return;
+  const c = new THREE.Color();
+  for (let t = 0; t < triToFace.length; t++) {
+    faceColor(triToFace[t], c);
+    for (let k = 0; k < 3; k++) {
+      const i = t * 3 + k;
+      colorAttr.array[i*3] = c.r; colorAttr.array[i*3+1] = c.g; colorAttr.array[i*3+2] = c.b;
+    }
+  }
+  colorAttr.needsUpdate = true;
+}
+
+function updateSelInfo() {
+  const el = document.getElementById('selinfo');
+  if (!selection.size) { el.textContent = 'none'; return; }
+  const arr = [...selection];
+  el.textContent = `${arr.length} face(s): [${arr.slice(0, 12).join(', ')}${arr.length > 12 ? '…' : ''}]`
+    + (faces.face_id ? `\n${faceLabel(arr[0])}` : '');
+}
+
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+const tip = document.getElementById('tip');
+let lastHover = 0;
+renderer.domElement.addEventListener('pointermove', e => {
+  if (markerDrag || overMarker) return;
+  if (!navMesh || !faces.face_id) { tip.style.display = 'none'; return; }
+  const now = performance.now();
+  if (now - lastHover < 30) return;
+  lastHover = now;
+  mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObject(navMesh)[0];
+  if (!hit) { tip.style.display = 'none'; return; }
+  tip.textContent = faceLabel(triToFace[hit.faceIndex]);
+  tip.style.display = 'block';
+  tip.style.left = (e.clientX + 14) + 'px';
+  tip.style.top = (e.clientY + 10) + 'px';
+});
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => downAt = [e.clientX, e.clientY]);
+renderer.domElement.addEventListener('pointerup', e => {
+  if (markerDrag) return;
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || !navMesh) return;
+  mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObject(navMesh)[0];
+  if (!hit) { if (!e.shiftKey) { selection.clear(); repaint(); updateSelInfo(); } return; }
+  const fi = triToFace[hit.faceIndex];
+  if (!e.shiftKey) selection.clear();
+  selection.has(fi) ? selection.delete(fi) : selection.add(fi);
+  repaint(); updateSelInfo();
+});
+
+window.browseDir = async () => {
+  msg('pick a folder in the dialog (check the taskbar)…');
+  const r = await api('/api/browse');
+  if (!r.path) { msg('folder selection cancelled'); return; }
+  document.getElementById('sceneDir').value = r.path;
+  await loadScene();
+};
+window.loadScene = async () => {
+  msg('loading…');
+  const info = await api('/api/load', { scene_dir: document.getElementById('sceneDir').value });
+  showStats(info); selection.clear(); updateSelInfo();
+  await drawTerrain(); await drawNavmesh(); await drawEntities();
+  msg('loaded');
+};
+window.genMesh = async (replace) => {
+  msg('generating…');
+  const body = {
+    cell_size: parseFloat(document.getElementById('cellSize').value),
+    max_slope_deg: parseFloat(document.getElementById('maxSlope').value),
+    replace,
+  };
+  const r = document.getElementById('region').value.trim();
+  if (r) {
+    const [a, b, c2, d] = r.split(',').map(parseFloat);
+    Object.assign(body, { min_x: a, min_y: b, max_x: c2, max_y: d });
+  }
+  const info = await api('/api/generate', body);
+  showStats(info); selection.clear(); updateSelInfo();
+  await drawNavmesh(); msg('generated');
+};
+window.applyAttrs = async () => {
+  if (!selection.size) return msg('nothing selected');
+  await api('/api/set_attrs', { indices: [...selection],
+    face_id: parseInt(document.getElementById('faceId').value),
+    group: parseInt(document.getElementById('group').value) });
+  await drawNavmesh(); msg('attributes applied'); updateSelInfo();
+};
+window.deleteSel = async () => {
+  if (!selection.size) return msg('nothing selected');
+  const info = await api('/api/delete_faces', { indices: [...selection] });
+  selection.clear(); showStats(info); updateSelInfo();
+  await drawNavmesh(); msg('deleted');
+};
+window.saveMesh = async () => {
+  const r = await api('/api/save', {});
+  msg('saved: ' + r.path);
+  showStats(await api('/api/info'));
+};
+window.toggleTerrain = () => { if (terrainMesh) terrainMesh.visible = !terrainMesh.visible; };
+window.setColorMode = v => { colorMode = v; repaint(); buildLegend(); };
+
+// ---- settlement placement layer ----
+function updateEntInfo(extra) {
+  const el = document.getElementById('entinfo');
+  if (!markerMeshes.length) { el.textContent = 'no settlements'; return; }
+  const mv = markerMeshes.filter(m => m.userData.ent.movable);
+  const wet = mv.filter(m => !m.userData.ent.on_land).length;
+  const part = mv.filter(m => { const f = m.userData.ent.land_fraction;
+    return f != null && f > 0 && f < 0.999; }).length;
+  el.textContent = `${mv.length} movable · ${wet} in water · ${part} part-land · ${movedCount} moved`
+    + (extra ? `\n${extra}` : '');
+  document.getElementById('saveEntBtn').textContent =
+    movedCount ? `Save placements (${movedCount})` : 'Save placements';
+}
+
+// Human word for a settlement's zone verdict.
+function zoneWord(s) {
+  const f = s.land_fraction;
+  if (f == null) return s.on_land ? 'land' : 'WATER';
+  if (f >= 0.999) return 'land';
+  return f > 0 ? `part land ${Math.round(f * 100)}%` : 'WATER';
+}
+
+// Zone-based verdict: green = fully on land, amber = zone partly on land (valid,
+// e.g. a coastal/riverside settlement), red = zone entirely in water (invalid).
+function markerColor(s) {
+  if (!s.movable) return C_REF;
+  const f = s.land_fraction;
+  if (f == null) return s.on_land ? C_LAND : C_WATER;
+  if (f >= 0.999) return C_LAND;
+  return f > 0 ? C_PARTIAL : C_WATER;
+}
+
+function makeLabel(text, mult = 1) {
+  const font = Math.round(26 * mult), pad = Math.round(7 * mult);  // pad leaves room for the outline
+  const c = document.createElement('canvas'), ctx = c.getContext('2d');
+  ctx.font = `${font}px sans-serif`;
+  c.width = Math.ceil(ctx.measureText(text).width) + pad * 2;
+  c.height = font + pad * 2;
+  ctx.font = `${font}px sans-serif`;
+  ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  const tx = pad, ty = c.height / 2 + 1;
+  ctx.lineWidth = Math.max(3, font * 0.2);            // dark outline instead of a filled box
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.strokeText(text, tx, ty);
+  ctx.fillStyle = '#ffe9c9'; ctx.fillText(text, tx, ty);
+  const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, depthTest: false, transparent: true }));
+  const k = 0.09;
+  spr.scale.set(c.width * k, c.height * k, 1);
+  spr.position.set(0, 6 * mult, 0);   // lift larger labels clear of the marker
+  return spr;
+}
+
+function makeFootprint(radius, type) {
+  const col = FP_COL[type] ?? 0x888888;
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 48),
+    new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.16,
+      side: THREE.DoubleSide, depthWrite: false }));
+  const pts = [];
+  for (let i = 0; i <= 64; i++) {
+    const a = i / 64 * Math.PI * 2;
+    pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0));
+  }
+  const ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.8 }));
+  const g = new THREE.Group();
+  g.add(disc); g.add(ring);
+  g.rotation.x = -Math.PI / 2;      // CircleGeometry lies in XY -> lay flat in XZ
+  g.position.set(0, -MARK_LIFT, 0); // sit on the ground under the lifted marker
+  return g;
+}
+
+async function drawEntities() {
+  let data;
+  try { data = await api('/api/entities'); } catch { return; }
+  if (entGroup) { scene.remove(entGroup); entGroup = null; }
+  markerMeshes = []; labelSprites = [];
+  movedCount = data.moved || 0; waterLevel = data.water_level ?? 10.0;
+  const tr = data.type_radius || {};
+  if (tr.town != null) document.getElementById('townR').value = tr.town;
+  if (tr.castle != null) document.getElementById('castleR').value = tr.castle;
+  entGroup = new THREE.Group();
+  for (const s of data.settlements) {
+    const m = new THREE.Mesh(geoForType(s.type),
+      new THREE.MeshBasicMaterial({ color: markerColor(s) }));
+    const [X, Y, Z] = W2T(s.x, s.y, Math.max(s.height, waterLevel) + MARK_LIFT);
+    m.position.set(X, Y, Z);
+    m.userData.ent = s;
+    if (s.movable) {
+      if (s.radius) m.add(makeFootprint(s.radius, s.type));
+      const lbl = makeLabel(s.name, LABEL_SCALE[s.type] ?? 1); lbl.visible = labelsOn;
+      m.add(lbl); labelSprites.push(lbl);
+    }
+    markerMeshes.push(m); entGroup.add(m);
+  }
+  scene.add(entGroup);
+  updateEntInfo();
+  if (selectedEnt) {
+    const still = data.settlements.find(s => s.id === selectedEnt.id);
+    selectedEnt = still || null;
+    if (selectedEnt) showSelectedEnt(selectedEnt); else clearSelectedEnt();
+  }
+  // Debug helper (also handy in the console): project markers to screen px.
+  window.__markerScreens = () => markerMeshes.map(m => {
+    const v = m.position.clone().project(camera);
+    return { id: m.userData.ent.id, movable: m.userData.ent.movable,
+      on_land: m.userData.ent.on_land, land_fraction: m.userData.ent.land_fraction,
+      color: '#' + m.material.color.getHexString(), visible: v.z < 1,
+      x: (v.x * 0.5 + 0.5) * innerWidth, y: (-v.y * 0.5 + 0.5) * innerHeight };
+  });
+  window.__labelSizes = () => {
+    const acc = {};
+    for (const m of markerMeshes) {
+      const t = m.userData.ent.type, lbl = m.children.find(c => c.isSprite);
+      if (!m.userData.ent.movable || !lbl) continue;
+      (acc[t] = acc[t] || []).push(lbl.scale.y);
+    }
+    const out = {};
+    for (const t in acc) out[t] = acc[t].reduce((a, b) => a + b, 0) / acc[t].length;
+    return out;   // avg label world-height per type
+  };
+  window.__entStats = () => {
+    const geo = { cone: 0, cylinder: 0, sphere: 0 };
+    let rings = 0;
+    for (const m of markerMeshes) {
+      const g = m.geometry.type;
+      if (g === 'ConeGeometry') geo.cone++;
+      else if (g === 'CylinderGeometry') geo.cylinder++;
+      else geo.sphere++;
+      if (m.children.some(c => c.isGroup)) rings++;
+    }
+    return { markers: markerMeshes.length, labels: labelSprites.length,
+      footprintRings: rings, shapes: geo, selected: selectedEnt && selectedEnt.id };
+  };
+}
+
+function pickMarker(e) {
+  if (!entGroup || !entGroup.visible || !markerMeshes.length) return null;
+  mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObjects(markerMeshes, false)[0];
+  return hit ? hit.object : null;
+}
+
+async function sendMove(ent, x, y) {
+  try {
+    const r = await api('/api/move_entity', { id: ent.id, x, y });
+    ent.x = r.x; ent.y = r.y; ent.height = r.height;
+    ent.on_land = r.on_land; ent.land_fraction = r.land_fraction;
+    if (!ent.moved) { ent.moved = true; movedCount++; }
+    dragEnt && dragEnt.userData.ent === ent && dragEnt.material.color.setHex(markerColor(ent));
+    updateEntInfo(`${ent.name}: ${r.x.toFixed(1)}, ${r.y.toFixed(1)}  (${zoneWord(r)})`);
+  } catch {}
+}
+
+addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.target !== renderer.domElement) return;
+  const m = pickMarker(e);
+  if (!m || !m.userData.ent.movable) return;
+  markerDrag = true; dragEnt = m; dragMoved = false; controls.enabled = false;
+  document.body.style.cursor = 'grabbing';
+  e.stopPropagation();
+}, true);
+
+addEventListener('pointermove', e => {
+  if (markerDrag) {
+    if (!terrainMesh) return;
+    mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    ray.setFromCamera(mouse, camera);
+    const hit = ray.intersectObject(terrainMesh)[0];
+    if (hit) {
+      const wx = hit.point.x, wy = -hit.point.z;
+      dragMoved = true;
+      dragEnt.position.set(hit.point.x, Math.max(hit.point.y, waterLevel) + MARK_LIFT, hit.point.z);
+      tip.textContent = `${dragEnt.userData.ent.name}  ${wx.toFixed(1)}, ${wy.toFixed(1)}`;
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 10) + 'px';
+      const now = performance.now();
+      if (now - lastMove > 70) { lastMove = now; sendMove(dragEnt.userData.ent, wx, wy); }
+    }
+    e.stopPropagation();
+    return;
+  }
+  if (e.target !== renderer.domElement) return;
+  const m = pickMarker(e);
+  if (m) {
+    overMarker = true;
+    const ent = m.userData.ent;
+    const flag = ent.movable ? zoneWord(ent) : 'locked';
+    tip.textContent = `${ent.name} · ${ent.type || '?'} · ${flag}${ent.moved ? ' · moved' : ''}`;
+    tip.style.display = 'block';
+    tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 10) + 'px';
+  } else if (overMarker) {
+    overMarker = false; tip.style.display = 'none';
+  }
+}, true);
+
+addEventListener('pointerup', e => {
+  if (!markerDrag) return;
+  if (dragMoved) {
+    const p = dragEnt.position;
+    sendMove(dragEnt.userData.ent, p.x, -p.z);   // final authoritative position
+  } else {
+    selectEnt(dragEnt.userData.ent);             // a click without a drag = select
+  }
+  markerDrag = false; dragEnt = null; controls.enabled = true;
+  document.body.style.cursor = '';
+  e.stopPropagation();
+}, true);
+
+window.toggleEntities = () => {
+  if (entGroup) { entGroup.visible = !entGroup.visible; if (!entGroup.visible) { overMarker = false; tip.style.display = 'none'; } }
+};
+window.resetMoves = async () => {
+  await api('/api/reset_moves', {});
+  await drawEntities(); msg('moves reset');
+};
+window.saveEntities = async () => {
+  if (!movedCount) return msg('no moves to save');
+  const r = await api('/api/save_entities', {});
+  msg(`saved ${r.changed} settlement(s) · backups: ${(r.backups || []).join(', ')}`);
+  await drawEntities();
+};
+window.toggleLabels = () => {
+  labelsOn = !labelsOn;
+  for (const l of labelSprites) l.visible = labelsOn;
+};
+
+// ---- selection + footprint radius ----
+function showSelectedEnt(ent) {
+  const rad = ent.radius != null ? ent.radius.toFixed(3) : '(no zone)';
+  document.getElementById('selinfoEnt').textContent =
+    `${ent.name}\n${ent.type || '?'} · radius ${rad}\n`
+    + `${ent.x.toFixed(1)}, ${ent.y.toFixed(1)} · ${ent.on_land ? 'land' : 'WATER'}`;
+  document.getElementById('customR').value = ent.radius != null ? ent.radius : '';
+}
+function clearSelectedEnt() {
+  document.getElementById('selinfoEnt').textContent = 'no settlement selected';
+  document.getElementById('customR').value = '';
+}
+function selectEnt(ent) {
+  selectedEnt = ent; showSelectedEnt(ent); msg(`selected ${ent.name}`);
+}
+window.saveFootprint = async () => {
+  const town = parseFloat(document.getElementById('townR').value);
+  const castle = parseFloat(document.getElementById('castleR').value);
+  const type_radius = {};
+  if (town >= 0) type_radius.town = town;
+  if (castle >= 0) type_radius.castle = castle;
+  if (!Object.keys(type_radius).length) return msg('enter a town/castle radius');
+  await api('/api/set_type_radius', { type_radius });
+  msg('type radius saved'); await drawEntities();
+};
+window.saveCustom = async () => {
+  if (!selectedEnt) return msg('click a settlement to select it first');
+  const v = document.getElementById('customR').value.trim();
+  const radius = v === '' ? null : parseFloat(v);
+  if (v !== '' && !(radius >= 0)) return msg('radius must be a number');
+  const r = await api('/api/set_custom_radius', { id: selectedEnt.id, radius });
+  selectedEnt = r;
+  msg(`radius for ${r.name}: ${r.radius != null ? r.radius : '(type default)'}`);
+  await drawEntities();
+};
+
+(async () => {
+  try {
+    const info = await api('/api/info');
+    document.getElementById('sceneDir').value = info.scene_dir;
+    showStats(info); await drawTerrain(); await drawNavmesh(); await drawEntities();
+  } catch { /* no scene preloaded */ }
+})();
+
+// ---- keyboard pan (WASD on QWERTY == ZQSD on AZERTY, via physical e.code) ----
+// e.code is layout-independent physical position: KeyW/KeyA/KeyS/KeyD is the
+// same physical diamond that is labelled W/A/S/D on QWERTY and Z/Q/S/D on AZERTY.
+const panKeys = new Set();
+function panToken(code) {
+  switch (code) {
+    case 'KeyW': case 'ArrowUp':    return 'fwd';
+    case 'KeyS': case 'ArrowDown':  return 'back';
+    case 'KeyA': case 'ArrowLeft':  return 'left';
+    case 'KeyD': case 'ArrowRight': return 'right';
+  }
+  return null;
+}
+const typingInField = () => {
+  const t = document.activeElement && document.activeElement.tagName;
+  return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT';
+};
+addEventListener('keydown', e => {
+  if (typingInField() || e.ctrlKey || e.metaKey || e.altKey) return;
+  const tok = panToken(e.code);
+  if (tok) { panKeys.add(tok); e.preventDefault(); }
+});
+addEventListener('keyup', e => { const tok = panToken(e.code); if (tok) panKeys.delete(tok); });
+addEventListener('blur', () => panKeys.clear());
+
+const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _delta = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const clock = new THREE.Clock();
+function applyPan(dt) {
+  if (!panKeys.size) return;
+  _fwd.subVectors(controls.target, camera.position); _fwd.y = 0;
+  if (_fwd.lengthSq() < 1e-9) return;
+  _fwd.normalize();
+  _right.crossVectors(_fwd, _up).normalize();
+  _delta.set(0, 0, 0);
+  if (panKeys.has('fwd'))   _delta.add(_fwd);
+  if (panKeys.has('back'))  _delta.sub(_fwd);
+  if (panKeys.has('right')) _delta.add(_right);
+  if (panKeys.has('left'))  _delta.sub(_right);
+  if (_delta.lengthSq() === 0) return;
+  // Pan eases down as you zoom in (slower the closer you get), floored at 25% of
+  // full-view speed so it never crawls; capped at full-view speed when zoomed out.
+  const liveDist = camera.position.distanceTo(controls.target);
+  const effDist = Math.max(Math.min(liveDist, panRefDist), panRefDist * 0.25);
+  const speed = 1.4 * effDist;
+  _delta.normalize().multiplyScalar(speed * dt);
+  camera.position.add(_delta);
+  controls.target.add(_delta);
+}
+
+renderer.setAnimationLoop(() => {
+  applyPan(clock.getDelta());
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+// Console/debug helper: camera-target position and live zoom distance.
+window.__cam = () => ({ tx: controls.target.x, tz: controls.target.z,
+  dist: camera.position.distanceTo(controls.target), panRef: panRefDist });
+</script>
+</body>
+</html>

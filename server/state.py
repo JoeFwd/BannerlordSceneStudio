@@ -24,6 +24,10 @@ class SceneSession:
     heights: np.ndarray | None = None      # float32 world heights
     mesh: nmg9.NavMesh = field(default_factory=nmg9.NavMesh)
     dirty: bool = False
+    settlements: list | None = None            # cached placement records
+    entity_moves: dict = field(default_factory=dict)  # id -> (x, y) staged moves
+    footprint: object | None = None            # cached placement.model.Footprint
+    land_oracle: object | None = None          # cached placement.model.LandOracle
 
     @property
     def navmesh_path(self) -> str:

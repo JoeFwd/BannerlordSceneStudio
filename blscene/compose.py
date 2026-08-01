@@ -33,6 +33,7 @@ import numpy as np
 
 from blscene.xscene import Scene
 from blscene.prefabs import PrefabCatalog
+from blscene.provenance import ProvenanceLog, write_provenance
 from blnav.terrain_write import generate_terrain, write_terrain, node_layer_usage
 from blnav import rnm1
 from blnav.generate import from_heightmap
@@ -271,6 +272,8 @@ class SceneBuilder:
         max_height: float | None = None,
         terrain_dirty: bool = False,
         layer_weights: dict[int, np.ndarray] | None = None,
+        generator_meta: dict | None = None,
+        navmesh_verbatim: bool = False,
     ) -> None:
         self._name = name
         self._scene = scene
@@ -280,8 +283,15 @@ class SceneBuilder:
         self._min_height = min_height
         self._max_height = max_height
         self._terrain_dirty = terrain_dirty  # False = copy source terrain.bin
+        # navmesh_verbatim: copy source navmesh.bin even when terrain is dirty.
+        # Used when composing a new terrain.bin *around* a donor castle whose
+        # navmesh (siege g3 ladder-drop/gate faces) must stay coherent with the
+        # transplanted structural prefabs. Navmesh Z is authored independently of
+        # terrain.bin at load, so a regenerated peripheral terrain is safe.
+        self._navmesh_verbatim = navmesh_verbatim
         self._layer_weights = layer_weights  # None = single-layer (uniform layer 0)
         self._flora_records: list = []  # transplanted FloraRecords (blnav.flora)
+        self._provenance = ProvenanceLog(name, generator_meta)
 
     # ------------------------------------------------------------------
     # Factories
@@ -297,12 +307,92 @@ class SceneBuilder:
         """
         xscene_path = os.path.join(scene_dir, "scene.xscene")
         scene = Scene.load(xscene_path)
-        return cls(
+        builder = cls(
             name,
             scene,
             source_dir=scene_dir,
             terrain_dirty=False,
         )
+        # Derive a short "module/scene" source label from the folder path.
+        parts = os.path.normpath(scene_dir).split(os.sep)
+        # Take the last two meaningful path components (module folder + scene).
+        source_label = "/".join(parts[-2:]) if len(parts) >= 2 else scene_dir
+        for role in ("xscene_skeleton", "terrain", "navmesh", "flora", "atmosphere", "references"):
+            builder._provenance.record(
+                role, source_label,
+                detail=f"verbatim clone of {os.path.basename(scene_dir)}",
+                verbatim=True,
+            )
+        return builder
+
+    def regenerate_terrain(
+        self,
+        heights: np.ndarray,
+        *,
+        layer_weights: dict[int, np.ndarray] | None = None,
+        keep_navmesh: bool = True,
+        detail: str = "regenerated terrain around donor castle footprint",
+    ) -> "SceneBuilder":
+        """Regenerate terrain.bin from *heights* on a cloned scene.
+
+        Intended for use after :meth:`from_scene`: it composes a new terrain
+        surface (e.g. a donor castle's plateau heights plus added landscape
+        features) while, when *keep_navmesh* is True, copying the donor
+        navmesh.bin verbatim so all siege g3 ladder-drop/gate faces stay
+        coherent with the transplanted structural prefabs.
+
+        The heights grid must match the 129-node convention
+        (H-1 and W-1 multiples of 128).  The scene's <terrain> element
+        (min/max height, node bounds, layer-usage masks) is rebuilt to match.
+
+        Args:
+            heights: float32 (H, W) heightmap, row=Y (south=0), col=X (west=0).
+            layer_weights: optional {layer_index: full-map weight array}.
+            keep_navmesh: copy the cloned navmesh.bin verbatim (default True).
+            detail: provenance note for the regenerated terrain.
+        Returns: self (for chaining).
+        """
+        heights = np.asarray(heights, dtype=np.float32)
+        H, W = heights.shape
+        if (H - 1) % 128 != 0 or (W - 1) % 128 != 0:
+            raise ValueError(
+                f"heights shape {heights.shape} is not compatible with 129-node "
+                f"math (H-1 and W-1 must each be multiples of 128)"
+            )
+        ny = (H - 1) // 128
+        nx = (W - 1) // 128
+        node_dim = (nx, ny)
+
+        terrain_elem = self._scene._root.find("terrain")
+        if terrain_elem is None:
+            raise RuntimeError("Cloned xscene has no <terrain> element")
+        node_size = float(terrain_elem.get("node_size", "100.0"))
+        min_height = float(np.min(heights))
+        max_height = float(np.max(heights))
+        terrain_elem.set("node_dimension_x", str(nx))
+        terrain_elem.set("node_dimension_y", str(ny))
+        terrain_elem.set("node_size", "%.3f" % node_size)
+        terrain_elem.set("min_height", "%.3f" % min_height)
+        terrain_elem.set("max_height", "%.3f" % max_height)
+
+        node_usage = node_layer_usage(layer_weights, heights.shape, node_dim)
+        _rebuild_terrain_nodes(terrain_elem, heights, node_dim, node_size, node_usage)
+
+        self._heights = heights
+        self._node_size = node_size
+        self._min_height = min_height
+        self._max_height = max_height
+        self._terrain_dirty = True
+        self._navmesh_verbatim = keep_navmesh
+        self._layer_weights = layer_weights
+
+        # Correct provenance: terrain is now generated, not a verbatim clone.
+        for rec in self._provenance.sources:
+            if rec.get("role") == "terrain":
+                rec["source"] = "GENERATED"
+                rec["detail"] = detail
+                rec["verbatim"] = None
+        return self
 
     @classmethod
     def new_battle(
@@ -397,7 +487,7 @@ class SceneBuilder:
         # --- Snap path point positions z to new terrain height ---
         _snap_paths(scene._root, heights, world_size_x, world_size_y)
 
-        return cls(
+        builder = cls(
             name,
             scene,
             source_dir=template_dir,
@@ -408,6 +498,42 @@ class SceneBuilder:
             terrain_dirty=True,
             layer_weights=layer_weights,
         )
+        # Record provenance: template skeleton reused, everything else generated.
+        tmpl_parts = os.path.normpath(template_dir).split(os.sep)
+        tmpl_label = "/".join(tmpl_parts[-2:]) if len(tmpl_parts) >= 2 else template_dir
+        builder._provenance.record(
+            "xscene_skeleton", tmpl_label,
+            detail="battle infrastructure + layers kept; decoration entities stripped",
+            verbatim=False,
+        )
+        builder._provenance.record(
+            "atmosphere", tmpl_label,
+            detail="copied verbatim from template",
+            verbatim=True,
+        )
+        builder._provenance.record(
+            "references", tmpl_label,
+            detail="copied verbatim from template (v1 approximation)",
+            verbatim=True,
+        )
+        builder._provenance.record(
+            "terrain", "GENERATED",
+            detail=f"from_heightmap: shape={heights.shape} node_size={node_size} "
+                   f"min={min_height:.3f} max={max_height:.3f}"
+                   + (f" layer_weights={sorted(layer_weights)}" if layer_weights else ""),
+            verbatim=None,
+        )
+        builder._provenance.record(
+            "navmesh", "GENERATED",
+            detail="from_heightmap cell_size=4.0 max_slope_deg=40.0",
+            verbatim=None,
+        )
+        builder._provenance.record(
+            "flora", "GENERATED",
+            detail="empty stub (FLR2 header, 0 records) unless add_flora() is called",
+            verbatim=None,
+        )
+        return builder
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -488,6 +614,32 @@ class SceneBuilder:
         """
         self._flora_records.extend(records)
 
+    def provenance_note(self, key: str, value: object) -> None:
+        """Store a free-form generator metadata entry in the provenance log.
+
+        Examples::
+
+            builder.provenance_note("script", "examples/gen_stonehenge.py")
+            builder.provenance_note("seed", 42)
+        """
+        self._provenance.note(key, value)
+
+    def record_harvest(
+        self,
+        role: str,
+        source: str,
+        *,
+        detail: str = "",
+        count: int | None = None,
+    ) -> None:
+        """Record a harvest/placement operation in the provenance log.
+
+        Called automatically by :func:`blscene.harvest.place_entities` and
+        :func:`blscene.harvest.place_flora` when *target* is a SceneBuilder.
+        Generator scripts may also call it directly for custom annotations.
+        """
+        self._provenance.record(role, source, detail=detail, count=count, verbatim=False)
+
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
@@ -496,7 +648,7 @@ class SceneBuilder:
         """Write a complete SceneObj folder to *out_dir/<name>/*.
 
         Writes: scene.xscene, terrain.bin, flora.bin, atmosphere.xml,
-        references.txt, navmesh.bin.
+        references.txt, navmesh.bin, provenance.json, provenance.md.
 
         Validates that all sp_* entities have terrain under them (warns if not).
 
@@ -508,9 +660,12 @@ class SceneBuilder:
         # --- Validate sp_* entities are within terrain bounds ---
         self._validate_sp_entities(scene_dir)
 
+        written_files: list[str] = []
+
         # --- scene.xscene ---
         xscene_path = os.path.join(scene_dir, "scene.xscene")
         self._scene.save(xscene_path)
+        written_files.append("scene.xscene")
 
         # --- terrain.bin ---
         terrain_path = os.path.join(scene_dir, "terrain.bin")
@@ -530,6 +685,7 @@ class SceneBuilder:
             src_terrain = os.path.join(self._source_dir, "terrain.bin")
             if os.path.exists(src_terrain):
                 shutil.copy2(src_terrain, terrain_path)
+        written_files.append("terrain.bin")
 
         # --- flora.bin ---
         flora_path = os.path.join(scene_dir, "flora.bin")
@@ -548,12 +704,14 @@ class SceneBuilder:
                 with open(flora_path, "wb") as fh:
                     fh.write(b"FLR2")
                     fh.write(struct.pack("<II", 4, 0))
+        written_files.append("flora.bin")
 
         # --- atmosphere.xml ---
         atm_path = os.path.join(scene_dir, "atmosphere.xml")
         src_atm = os.path.join(self._source_dir, "atmosphere.xml")
         if os.path.exists(src_atm):
             shutil.copy2(src_atm, atm_path)
+            written_files.append("atmosphere.xml")
 
         # --- references.txt ---
         # Copied verbatim from template/source as v1 approximation.
@@ -563,10 +721,11 @@ class SceneBuilder:
         src_ref = os.path.join(self._source_dir, "references.txt")
         if os.path.exists(src_ref):
             shutil.copy2(src_ref, ref_path)
+            written_files.append("references.txt")
 
         # --- navmesh.bin ---
         navmesh_path = os.path.join(scene_dir, "navmesh.bin")
-        if self._terrain_dirty and self._heights is not None:
+        if self._terrain_dirty and self._heights is not None and not self._navmesh_verbatim:
             H, W = self._heights.shape
             ny = (H - 1) // 128
             nx = (W - 1) // 128
@@ -585,6 +744,17 @@ class SceneBuilder:
             src_nav = os.path.join(self._source_dir, "navmesh.bin")
             if os.path.exists(src_nav):
                 shutil.copy2(src_nav, navmesh_path)
+        written_files.append("navmesh.bin")
+
+        # --- provenance ---
+        write_provenance(
+            self._provenance,
+            scene_dir,
+            self._source_dir,
+            self._terrain_dirty,
+            written_files,
+            navmesh_verbatim=self._navmesh_verbatim,
+        )
 
         return scene_dir
 

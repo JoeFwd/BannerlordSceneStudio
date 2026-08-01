@@ -521,6 +521,16 @@ def place_entities(
         _append_entity(scene, new_elem)
         inserted.append(new_elem)
 
+    # Record provenance when target is a SceneBuilder.
+    if isinstance(target, SceneBuilder) and cluster.source:
+        target.record_harvest(
+            "entities",
+            cluster.source,
+            detail=f"placed at anchor ({x:.1f}, {y:.1f})"
+                   + (f" rot={rotation_deg:.1f}°" if rotation_deg else ""),
+            count=len(inserted),
+        )
+
     return inserted
 
 
@@ -675,4 +685,12 @@ def place_flora(
 
     if builder is not None:
         builder.add_flora(new_records)
+        if cluster.source:
+            builder.record_harvest(
+                "flora_transplant",
+                cluster.source,
+                detail=f"placed at anchor ({x:.1f}, {y:.1f})"
+                       + (f" rot={rotation_deg:.1f}°" if rotation_deg else ""),
+                count=len(new_records),
+            )
     return new_records
