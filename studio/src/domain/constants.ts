@@ -28,10 +28,10 @@ export const LABEL_SCALE: Record<string, number> = { town: 1.9, castle: 1.35, vi
 // Constant-on-screen label sizing + distance fade (fixes zoom-flicker + declutters).
 export const SS = 2;                 // supersample the text canvas so glyphs stay crisp
 export const ONSCREEN_PX = 15;       // village on-screen glyph height (px); town/castle scale up
-export const LABEL_OPACITY = 0.82;
-export const FADE_NEAR = 0.30;       // full opacity closer than 30% of full-view distance
-export const FADE_FAR = 0.58;        // faded out beyond 58%
-export const LABEL_FILL = '#ffe9c9'; // plain flat cream text, no outline/glow
+export const LABEL_OPACITY = 1.0;    // full white when zoomed in; the distance fade dims it out
+export const FADE_NEAR = 0.60;       // full white once you've zoomed to reading distance (<60% of full-view)
+export const FADE_FAR = 0.85;        // fades out toward full-view height, gone beyond 85%
+export const LABEL_FILL = '#ffffff'; // white text; brightness/whiteness rides on the zoom fade
 
 // Scene / camera.
 export const SCENE_BG = 0x151515;
