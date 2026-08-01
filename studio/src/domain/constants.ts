@@ -23,7 +23,7 @@ export const FP_COL: Record<string, number> = { town: 0x2d6cdf, castle: 0xd08a2d
 export const FP_FALLBACK = 0x888888;
 
 // Label text size by type: towns much larger, castles medium, villages baseline.
-export const LABEL_SCALE: Record<string, number> = { town: 1.9, castle: 1.35, village: 1.0 };
+export const LABEL_SCALE: Record<string, number> = { town: 2.25, castle: 1.65, village: 1.3 };
 
 // Constant-on-screen label sizing + distance fade (fixes zoom-flicker + declutters).
 export const SS = 2;                 // supersample the text canvas so glyphs stay crisp
