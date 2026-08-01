@@ -13,6 +13,8 @@ import { CameraController } from './CameraController';
 export function Studio() {
   return (
     <Canvas
+      flat  // NoToneMapping — R3F defaults to ACESFilmic, which desaturates the vivid
+            // terrain/water colours; the vanilla renderer used no tone mapping.
       gl={{ antialias: true }}
       camera={{ fov: CAM_FOV, near: CAM_NEAR, far: CAM_FAR }}
       onCreated={({ scene }) => { scene.background = new THREE.Color(SCENE_BG); }}
