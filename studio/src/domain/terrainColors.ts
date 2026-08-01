@@ -63,10 +63,23 @@ export function keyColor(k: number, ctx: Pick<FaceColorContext, 'colorMode' | 'i
   return hslToRgb(0.55 + 0.35 * hue, 0.75, 0.55);
 }
 
-export function faceColor(i: number, ctx: FaceColorContext): RGB {
+// sRGB -> linear working space, byte-for-byte as three.js ColorManagement does it.
+// The GPU vertex buffer must receive linear values: the original app built its
+// face colours with THREE.Color.set()/.setHSL(), both of which run this transfer
+// (ColorManagement.enabled defaults true in three r160). Feeding raw sRGB here
+// instead washed the navmesh out (water too pale, forest not dark enough).
+function srgbToLinearChannel(c: number): number {
+  return c < 0.04045 ? c * 0.0773993808 : Math.pow(c * 0.9478672986 + 0.0521327014, 2.4);
+}
+
+// keyColor always returns sRGB (hex or HSL), so the linear GPU colour is a straight
+// per-channel transfer. Selection / no-mesh colours used setRGB (no conversion) in
+// the original, so they pass through unchanged, matching it exactly.
+export function faceColorLinear(i: number, ctx: FaceColorContext): RGB {
   if (ctx.selection.has(i)) return [1.0, 0.15, 0.75];
   if (!ctx.faceId.length) return [0.3, 0.5, 0.8];
-  return keyColor(ctx.colorMode === 'island' ? ctx.group[i] : ctx.faceId[i], ctx);
+  const [r, g, b] = keyColor(ctx.colorMode === 'island' ? ctx.group[i] : ctx.faceId[i], ctx);
+  return [srgbToLinearChannel(r), srgbToLinearChannel(g), srgbToLinearChannel(b)];
 }
 
 export function faceLabel(

@@ -10,7 +10,7 @@ import {
   LABEL_OPACITY, ONSCREEN_PX, SS, LABEL_FILL,
 } from '../domain/constants';
 import { markerColor } from '../domain/markerColor';
-import { faceColor, type FaceColorContext } from '../domain/terrainColors';
+import { faceColorLinear, type FaceColorContext } from '../domain/terrainColors';
 import type { MarkerRef } from './sceneRefs';
 
 // ---- terrain ---------------------------------------------------------------
@@ -68,7 +68,7 @@ export function buildNavmesh(
     const v = tris[i] * 3;
     const [X, Y, Z] = W2T(mesh.vertices[v], mesh.vertices[v + 1], mesh.vertices[v + 2] + NAVMESH_LIFT);
     pos[i * 3] = X; pos[i * 3 + 1] = Y; pos[i * 3 + 2] = Z;
-    const [r, g, b] = faceColor(triToFace[(i / 3) | 0], ctx);
+    const [r, g, b] = faceColorLinear(triToFace[(i / 3) | 0], ctx);
     col[i * 3] = r; col[i * 3 + 1] = g; col[i * 3 + 2] = b;
   }
   const geo = new THREE.BufferGeometry();
@@ -92,7 +92,7 @@ export function repaintNavmesh(
   const ctx = ctxFrom(mesh, selection, colorMode, isCampaign);
   const arr = built.colorAttr.array as Float32Array;
   for (let t = 0; t < built.triToFace.length; t++) {
-    const [r, g, b] = faceColor(built.triToFace[t], ctx);
+    const [r, g, b] = faceColorLinear(built.triToFace[t], ctx);
     for (let k = 0; k < 3; k++) {
       const i = t * 3 + k;
       arr[i * 3] = r; arr[i * 3 + 1] = g; arr[i * 3 + 2] = b;
