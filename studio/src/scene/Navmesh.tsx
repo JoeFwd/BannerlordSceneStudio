@@ -8,6 +8,7 @@ import { buildNavmesh, repaintNavmesh, type BuiltNavmesh } from './builders';
 import { sceneRefs } from './sceneRefs';
 import { interaction } from './interaction';
 import { tip } from '../ui/tip';
+import { NAVMESH_LIFT } from '../domain/constants';
 
 const ray = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
@@ -21,6 +22,7 @@ export function Navmesh() {
   const colorMode = useStudioStore((s) => s.colorMode);
   const selection = useStudioStore((s) => s.selection);
   const isCampaign = useStudioStore((s) => s.isCampaign);
+  const rawNavmesh = useStudioStore((s) => s.rawNavmesh);
   const selectFaceAt = useStudioStore((s) => s.selectFaceAt);
   const clearSelection = useStudioStore((s) => s.clearSelection);
 
@@ -32,6 +34,16 @@ export function Navmesh() {
   );
   const builtRef = useRef<BuiltNavmesh | null>(null);
   builtRef.current = built;
+
+  // Keep the camera and serialized data unchanged when comparing raw geometry
+  // against Studio's lifted, double-sided convenience view.
+  useEffect(() => {
+    if (!built) return;
+    built.group.position.y = rawNavmesh ? -NAVMESH_LIFT : 0;
+    const material = built.navMesh.material as THREE.MeshBasicMaterial;
+    material.side = rawNavmesh ? THREE.FrontSide : THREE.DoubleSide;
+    material.needsUpdate = true;
+  }, [built, rawNavmesh]);
 
   // Register the pickable surface + frame the camera once per new mesh.
   useEffect(() => {

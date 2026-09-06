@@ -24,6 +24,8 @@ from pydantic import BaseModel
 mimetypes.add_type("application/javascript", ".js")
 
 import server.state as state
+from server import navmesh_diagnostics as diagnostics
+from server.terrain_preview import resample_heights
 from server.placement import config as placement_config
 from server.placement import model as placement_model
 from server.placement import repository as placement_repo
@@ -117,14 +119,29 @@ def api_mesh():
     }
 
 
+@app.get("/api/navmesh/inspect-region")
+def api_inspect_region(min_x: float, min_y: float, max_x: float, max_y: float,
+                       limit: int = 200):
+    try:
+        return diagnostics.inspect_region(_sess(), min_x, min_y, max_x, max_y, limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/navmesh/probe-point")
+def api_probe_point(x: float, y: float):
+    return diagnostics.probe_point(_sess(), x, y)
+
+
 @app.get("/api/terrain")
 def api_terrain(max_dim: int = 256):
     sess = _sess()
     if sess.heights is None:
         return {"grid": None}
-    h = sess.heights
-    step = max(1, int(np.ceil(max(h.shape) / max_dim)))
-    g = h[::step, ::step]
+    try:
+        g = resample_heights(sess.heights, max_dim)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return {
         "rows": g.shape[0],
         "cols": g.shape[1],

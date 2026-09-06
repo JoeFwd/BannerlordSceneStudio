@@ -8,6 +8,16 @@ import { useEntitiesStore } from '../state/entitiesStore';
 export function installProbes(): void {
   const w = window as unknown as Record<string, unknown>;
 
+  w.__navmeshDisplay = () => {
+    const mesh = sceneRefs.navMesh;
+    if (!mesh) return null;
+    return {
+      displayOffsetY: mesh.parent?.position.y ?? 0,
+      side: (mesh.material as unknown as { side: number }).side,
+      renderedVertices: mesh.geometry.attributes.position.count,
+    };
+  };
+
   w.__markerScreens = () => {
     const cam = sceneRefs.camera;
     if (!cam) return [];
@@ -68,6 +78,21 @@ export function installProbes(): void {
       dist: cam.position.distanceTo(c.target),
       panRef: sceneRefs.panRefDist,
     };
+  };
+
+  // Frame a Bannerlord world-space point without exposing or mutating mesh data.
+  // Intended for deterministic diagnostic screenshots (world y maps to Three z=-y).
+  w.__frameWorld = (x: number, y: number, distance?: number) => {
+    const cam = sceneRefs.camera;
+    const c = sceneRefs.controls;
+    if (!cam || !c) return null;
+    const offset = cam.position.clone().sub(c.target);
+    const requestedDistance = distance ?? offset.length();
+    offset.normalize().multiplyScalar(requestedDistance);
+    c.target.set(x, c.target.y, -y);
+    cam.position.copy(c.target).add(offset);
+    c.update();
+    return { tx: c.target.x, tz: c.target.z, dist: requestedDistance };
   };
 }
 

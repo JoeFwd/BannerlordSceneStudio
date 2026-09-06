@@ -77,7 +77,27 @@ export function buildNavmesh(
   geo.setAttribute('color', colorAttr);
   const navMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
     vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
-  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
+  // Source polygon boundaries, not triangle-normal creases: EdgesGeometry
+  // invents diagonals on non-planar quads and hides coplanar face boundaries.
+  const edgePositions: number[] = [];
+  const seenEdges = new Set<string>();
+  for (const ids of mesh.faces) {
+    if (ids.length < 3) continue;
+    for (let k = 0; k < ids.length; k++) {
+      const a = ids[k], b = ids[(k + 1) % ids.length];
+      if (a === b) continue;
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+      for (const id of [a, b]) {
+        const v = id * 3;
+        edgePositions.push(...W2T(mesh.vertices[v], mesh.vertices[v + 1], mesh.vertices[v + 2] + NAVMESH_LIFT));
+      }
+    }
+  }
+  const edgeGeo = new THREE.BufferGeometry();
+  edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+  const edges = new THREE.LineSegments(edgeGeo,
     new THREE.LineBasicMaterial({ color: 0x224466, transparent: true, opacity: 0.6 }));
   const group = new THREE.Group();
   group.add(navMesh); group.add(edges);

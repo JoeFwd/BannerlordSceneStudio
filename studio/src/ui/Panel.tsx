@@ -25,10 +25,16 @@ export function Panel() {
 
       <label>Colour by</label>
       <select id="colorMode" value={s.colorMode} onChange={(ev) => s.setColorMode(ev.target.value as ColorMode)}>
+        <option value="editor">editor colours (Plain / Mountain / Lake / River)</option>
         <option value="terrain">terrain type / face id (g3)</option>
         <option value="island">island (g5)</option>
       </select>
       <Legend />
+      <label>
+        <input id="rawNavmesh" type="checkbox" checked={s.rawNavmesh} onChange={() => s.toggleRawNavmesh()} />
+        Raw mesh: no display lift, front faces only
+      </label>
+      {s.rawNavmesh && <small>Diagnostic view only; not an emulation of Bannerlord's renderer.</small>}
 
       <hr style={{ borderColor: '#333' }} />
       <b>Generate from terrain</b>

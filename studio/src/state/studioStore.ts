@@ -26,6 +26,7 @@ interface StudioState {
   colorMode: ColorMode;
   selection: Set<number>;
   terrainVisible: boolean;
+  rawNavmesh: boolean;
   msg: string;
   // navmesh generation / attribute form inputs
   cellSize: string;
@@ -38,6 +39,7 @@ interface StudioState {
   setField: (k: 'sceneDir' | 'cellSize' | 'maxSlope' | 'region' | 'faceId' | 'group', v: string) => void;
   setColorMode: (v: ColorMode) => void;
   toggleTerrain: () => void;
+  toggleRawNavmesh: () => void;
 
   init: () => Promise<void>;
   loadScene: () => Promise<void>;
@@ -63,6 +65,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   colorMode: 'terrain',
   selection: new Set(),
   terrainVisible: true,
+  rawNavmesh: false,
   msg: '',
   cellSize: '4',
   maxSlope: '40',
@@ -74,6 +77,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setField: (k, v) => set({ [k]: v } as Partial<StudioState>),
   setColorMode: (v) => set({ colorMode: v }),
   toggleTerrain: () => set((s) => ({ terrainVisible: !s.terrainVisible })),
+  toggleRawNavmesh: () => set((s) => ({ rawNavmesh: !s.rawNavmesh })),
 
   _applyInfo: (info) =>
     set({ info, sceneDir: info.scene_dir, statsText: statsFrom(info), isCampaign: isCampaignScene(info.scene_dir) }),

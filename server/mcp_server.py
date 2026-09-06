@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastmcp import FastMCP
 
 import server.state as state
+from server import navmesh_diagnostics as diagnostics
 from blnav import generate
 from blnav.nmg9 import Face
 
@@ -61,6 +62,24 @@ def scene_info() -> dict:
 def sample_height(x: float, y: float) -> float:
     """Terrain surface height (world meters) at world position (x, y)."""
     return state.current().sample_height(x, y)
+
+
+@mcp.tool
+def inspect_navmesh_region(min_x: float, min_y: float, max_x: float, max_y: float,
+                           limit: int = 200) -> dict:
+    """Inspect intersecting polygon footprints, all g3 counts, referenced versus
+    orphan vertices, and working/disk identity. Full-precision face detail is
+    limited, but counts are not. Does not infer native visibility or coverage
+    from centroids; summed polygon area is not union coverage."""
+    return diagnostics.inspect_region(state.current(), min_x, min_y, max_x, max_y, limit)
+
+
+@mcp.tool
+def probe_navmesh_point(x: float, y: float) -> dict:
+    """Find every face whose closed XY footprint contains a point, with exact
+    vertices and all g1-g6 attributes. Read-only file diagnostic, not a native
+    editor query. Includes working/disk identity to reveal stale Studio state."""
+    return diagnostics.probe_point(state.current(), x, y)
 
 
 @mcp.tool

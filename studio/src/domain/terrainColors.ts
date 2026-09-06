@@ -19,7 +19,13 @@ export const TERRAIN: Record<number, [string, string]> = {
   24: ['SeaRestriction', '#703070'], 25: ['UnderBridge', '#77808a'],
 };
 
-export type ColorMode = 'terrain' | 'island';
+// User-confirmed native editor colours for the Scottish campaign repair.
+// Unconfirmed terrain types retain the descriptive Studio palette.
+const EDITOR_COLORS: Record<number, string> = {
+  1: '#ffffff', 7: '#00e5e5', 8: '#ffff66', 11: '#3333dd',
+};
+
+export type ColorMode = 'terrain' | 'island' | 'editor';
 
 export interface FaceColorContext {
   colorMode: ColorMode;
@@ -58,6 +64,10 @@ export function hslToRgb(h: number, s: number, l: number): RGB {
 }
 
 export function keyColor(k: number, ctx: Pick<FaceColorContext, 'colorMode' | 'isCampaign'>): RGB {
+  if (ctx.colorMode === 'editor' && ctx.isCampaign) {
+    if (EDITOR_COLORS[k]) return hexToRgb(EDITOR_COLORS[k]);
+    if (TERRAIN[k]) return hexToRgb(TERRAIN[k][1]);
+  }
   if (ctx.colorMode === 'terrain' && ctx.isCampaign && TERRAIN[k]) return hexToRgb(TERRAIN[k][1]);
   const hue = ((((k % 12) + 12) % 12)) / 12;
   return hslToRgb(0.55 + 0.35 * hue, 0.75, 0.55);
@@ -105,7 +115,7 @@ export function legendRows(ctx: FaceColorContext): { rows: LegendRow[]; overflow
   for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
   const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const rows = sorted.slice(0, 24).map(([k, n]) => {
-    const label = ctx.colorMode === 'terrain' && ctx.isCampaign && TERRAIN[k]
+    const label = ctx.colorMode !== 'island' && ctx.isCampaign && TERRAIN[k]
       ? `${TERRAIN[k][0]} (${k})` : `${k}`;
     return { key: k, label, swatch: '#' + rgbToHex(keyColor(k, ctx)), count: n };
   });
