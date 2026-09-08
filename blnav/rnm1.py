@@ -23,7 +23,8 @@ VERSION = 3
 
 def read(path: str) -> bytes:
     """Return decompressed NMG9 payload from a navmesh.bin file."""
-    data = open(path, "rb").read()
+    with open(path, "rb") as fh:
+        data = fh.read()
     if data[:4] != MAGIC:
         raise ValueError(f"{path}: bad magic {data[:4]!r}")
     (version,) = struct.unpack_from("<I", data, 0x08)
