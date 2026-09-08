@@ -1,9 +1,11 @@
 // Campaign-map face colouring + legend. Pure: returns normalised [r,g,b] triples
 // and '#rrggbb' strings, with no three.js dependency.
 
+import { sceneLevelLabel } from './sceneLevels';
+
 export type RGB = [number, number, number];
 
-// TaleWorlds.Core.TerrainType — campaign map navmesh face group ids (g3).
+// TaleWorlds.Core.TerrainType — campaign map navmesh face terrain IDs (g3).
 export const TERRAIN: Record<number, [string, string]> = {
   0: ['(unset)', '#777777'], 1: ['Plain', '#7bb661'],
   2: ['Desert', '#d9c27a'], 3: ['Snow', '#eef2f5'],
@@ -25,13 +27,13 @@ const EDITOR_COLORS: Record<number, string> = {
   1: '#ffffff', 7: '#00e5e5', 8: '#ffff66', 11: '#3333dd',
 };
 
-export type ColorMode = 'terrain' | 'island' | 'editor';
+export type ColorMode = 'terrain' | 'levels' | 'editor';
 
 export interface FaceColorContext {
   colorMode: ColorMode;
   isCampaign: boolean;
   faceId: number[];   // g3 per face (empty when no mesh)
-  group: number[];    // g5 per face
+  sceneLevelMask: number[];    // g5 per face
   selection: Set<number>;
 }
 
@@ -88,17 +90,17 @@ function srgbToLinearChannel(c: number): number {
 export function faceColorLinear(i: number, ctx: FaceColorContext): RGB {
   if (ctx.selection.has(i)) return [1.0, 0.15, 0.75];
   if (!ctx.faceId.length) return [0.3, 0.5, 0.8];
-  const [r, g, b] = keyColor(ctx.colorMode === 'island' ? ctx.group[i] : ctx.faceId[i], ctx);
+  const [r, g, b] = keyColor(ctx.colorMode === 'levels' ? ctx.sceneLevelMask[i] : ctx.faceId[i], ctx);
   return [srgbToLinearChannel(r), srgbToLinearChannel(g), srgbToLinearChannel(b)];
 }
 
 export function faceLabel(
   i: number,
-  ctx: Pick<FaceColorContext, 'isCampaign' | 'faceId' | 'group'>,
+  ctx: Pick<FaceColorContext, 'isCampaign' | 'faceId' | 'sceneLevelMask'>,
 ): string {
   const id = ctx.faceId[i];
   const name = ctx.isCampaign && TERRAIN[id] ? ` (${TERRAIN[id][0]})` : '';
-  return `face #${i} · id ${id}${name} · island ${ctx.group[i]}`;
+  return `face #${i} · id ${id}${name} · levels ${sceneLevelLabel(ctx.sceneLevelMask[i], ctx.isCampaign)}`;
 }
 
 export interface LegendRow {
@@ -110,13 +112,13 @@ export interface LegendRow {
 
 export function legendRows(ctx: FaceColorContext): { rows: LegendRow[]; overflow: boolean } {
   if (!ctx.faceId.length) return { rows: [], overflow: false };
-  const vals = ctx.colorMode === 'island' ? ctx.group : ctx.faceId;
+  const vals = ctx.colorMode === 'levels' ? ctx.sceneLevelMask : ctx.faceId;
   const counts = new Map<number, number>();
   for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
   const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const rows = sorted.slice(0, 24).map(([k, n]) => {
-    const label = ctx.colorMode !== 'island' && ctx.isCampaign && TERRAIN[k]
-      ? `${TERRAIN[k][0]} (${k})` : `${k}`;
+    const label = ctx.colorMode !== 'levels' && ctx.isCampaign && TERRAIN[k]
+      ? `${TERRAIN[k][0]} (${k})` : ctx.colorMode === 'levels' ? sceneLevelLabel(k, ctx.isCampaign) : `${k}`;
     return { key: k, label, swatch: '#' + rgbToHex(keyColor(k, ctx)), count: n };
   });
   return { rows, overflow: counts.size > 24 };

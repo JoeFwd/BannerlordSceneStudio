@@ -11,7 +11,7 @@ export function SelInfo() {
     const arr = [...selection];
     text = `${arr.length} face(s): [${arr.slice(0, 12).join(', ')}${arr.length > 12 ? '…' : ''}]`;
     if (mesh && mesh.face_id.length) {
-      text += `\n${faceLabel(arr[0], { isCampaign: useStudioStore.getState().isCampaign, faceId: mesh.face_id, group: mesh.group })}`;
+      text += `\n${faceLabel(arr[0], { isCampaign: useStudioStore.getState().isCampaign, faceId: mesh.face_id, sceneLevelMask: mesh.scene_level_mask })}`;
     }
   }
   return <div id="selinfo">{text}</div>;

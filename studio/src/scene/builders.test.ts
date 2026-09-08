@@ -6,7 +6,7 @@ import { NAVMESH_LIFT } from '../domain/constants';
 import type { MeshResponse } from '../domain/types';
 
 function fixture(vertices: number[], faces: number[][]) {
-  const mesh: MeshResponse = { vertices, faces, face_id: faces.map(() => 1), group: faces.map(() => 0) };
+  const mesh: MeshResponse = { vertices, faces, face_id: faces.map(() => 1), scene_level_mask: faces.map(() => -1) };
   const before = JSON.stringify(mesh);
   const built = buildNavmesh(mesh, new Set(), 'terrain', true);
   const edges = built.group.children[1] as THREE.LineSegments;

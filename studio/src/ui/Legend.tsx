@@ -9,7 +9,7 @@ export function Legend() {
   const selection = useStudioStore((s) => s.selection);
 
   if (!mesh) return <div id="legend" />;
-  const ctx: FaceColorContext = { colorMode, isCampaign, faceId: mesh.face_id, group: mesh.group, selection };
+  const ctx: FaceColorContext = { colorMode, isCampaign, faceId: mesh.face_id, sceneLevelMask: mesh.scene_level_mask, selection };
   const { rows, overflow } = legendRows(ctx);
   return (
     <div id="legend">

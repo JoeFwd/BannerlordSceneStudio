@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { CAMPAIGN_REQUIRED_LEVELS } from '../domain/sceneLevels';
 import { studioApi, type GenerateReq } from '../api/studioApi';
 import type { Info, MeshResponse, TerrainResponse } from '../domain/types';
 import type { ColorMode } from '../domain/terrainColors';
@@ -27,19 +28,21 @@ interface StudioState {
   selection: Set<number>;
   terrainVisible: boolean;
   rawNavmesh: boolean;
+  requiredSceneLevels: number;
   msg: string;
   // navmesh generation / attribute form inputs
   cellSize: string;
   maxSlope: string;
   region: string;
   faceId: string;
-  group: string;
+  sceneLevelMask: string;
 
   setMsg: (t: string) => void;
-  setField: (k: 'sceneDir' | 'cellSize' | 'maxSlope' | 'region' | 'faceId' | 'group', v: string) => void;
+  setField: (k: 'sceneDir' | 'cellSize' | 'maxSlope' | 'region' | 'faceId' | 'sceneLevelMask', v: string) => void;
   setColorMode: (v: ColorMode) => void;
   toggleTerrain: () => void;
   toggleRawNavmesh: () => void;
+  toggleCampaignLevels: () => void;
 
   init: () => Promise<void>;
   loadScene: () => Promise<void>;
@@ -66,12 +69,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   selection: new Set(),
   terrainVisible: true,
   rawNavmesh: false,
+  requiredSceneLevels: 0,
   msg: '',
   cellSize: '4',
   maxSlope: '40',
   region: '',
   faceId: '0',
-  group: '-1',
+  sceneLevelMask: '',
 
   setMsg: (t) => set({ msg: t }),
   setField: (k, v) => set({ [k]: v } as Partial<StudioState>),
@@ -79,8 +83,16 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   toggleTerrain: () => set((s) => ({ terrainVisible: !s.terrainVisible })),
   toggleRawNavmesh: () => set((s) => ({ rawNavmesh: !s.rawNavmesh })),
 
-  _applyInfo: (info) =>
-    set({ info, sceneDir: info.scene_dir, statsText: statsFrom(info), isCampaign: isCampaignScene(info.scene_dir) }),
+  toggleCampaignLevels: () => set((s) => ({
+    requiredSceneLevels: s.requiredSceneLevels ? 0 : CAMPAIGN_REQUIRED_LEVELS,
+    selection: new Set(),
+  })),
+
+  _applyInfo: (info) => set((s) => {
+    const isCampaign = isCampaignScene(info.scene_dir);
+    return { info, sceneDir: info.scene_dir, statsText: statsFrom(info), isCampaign,
+      requiredSceneLevels: s.info?.scene_dir === info.scene_dir ? s.requiredSceneLevels : (isCampaign ? CAMPAIGN_REQUIRED_LEVELS : 0) };
+  }),
 
   _reloadMesh: async () => {
     const mesh = await studioApi.getMesh();
@@ -158,17 +170,25 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const sel = additive ? new Set(s.selection) : new Set<number>();
       if (sel.has(fi)) sel.delete(fi);
       else sel.add(fi);
-      return { selection: sel };
+      const selected = [...sel];
+      const masks = new Set(selected.map((i) => s.mesh?.scene_level_mask[i]));
+      return { selection: sel,
+        faceId: selected.length === 1 ? String(s.mesh?.face_id[selected[0]]) : s.faceId,
+        sceneLevelMask: masks.size === 1 ? String(s.mesh?.scene_level_mask[selected[0]]) : '' };
     }),
 
   // Click on empty space: non-shift clears; shift keeps the current selection.
   clearSelection: (additive) => set(additive ? {} : { selection: new Set<number>() }),
 
   applyAttrs: async () => {
-    const { selection, faceId, group } = get();
+    const { selection, faceId, sceneLevelMask } = get();
     if (!selection.size) return set({ msg: 'nothing selected' });
     try {
-      await studioApi.setAttrs([...selection], parseInt(faceId), parseInt(group));
+      const mask = sceneLevelMask.trim() === '' ? undefined : Number(sceneLevelMask);
+      if (mask !== undefined && (!Number.isInteger(mask) || mask < -2147483648 || mask > 2147483647)) {
+        throw new Error('Scene-level mask must be a signed 32-bit integer');
+      }
+      await studioApi.setAttrs([...selection], parseInt(faceId), mask);
       await get()._reloadMesh();
       set({ msg: 'attributes applied' });
     } catch (e) {

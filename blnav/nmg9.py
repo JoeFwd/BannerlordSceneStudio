@@ -38,7 +38,7 @@ class Face:
     g2: int = 0
     g3: int = 0   # dynamic navmesh face id (SetAbilityOfFacesWithId)
     g4: int = 0
-    g5: int = 0   # island/group id
+    g5: int = -1  # signed scene-level visibility mask; -1 enables all levels
     g6: int = 0   # byte flag
 
 
@@ -114,7 +114,7 @@ class NavMesh:
             "faces": len(self.faces),
             "face_sizes": dict(Counter(len(f.vertex_ids) for f in self.faces)),
             "face_ids_g3": dict(Counter(f.g3 for f in self.faces)),
-            "groups_g5": dict(Counter(f.g5 for f in self.faces)),
+            "scene_level_masks_g5": dict(Counter(f.g5 for f in self.faces)),
         }
 
     def to_obj(self) -> str:

@@ -26,7 +26,7 @@ u32 vertex_count            vertex_count × { f32 x, y, z }          (world mete
 u32 edge_count              edge_count × { -1, u32 va, u32 vb, -1, -1, 0 }   (24 B)
 u32 face_count              face_count × { u32 n; n×u32 verts; n×u32 edges;
                                             i32 2; i32 0; i32 face_id; i32 0;
-                                            i32 group; u8 flag }    (4+8n+21 B, unaligned)
+                                            i32 scene_level_mask; u8 flag }    (4+8n+21 B, unaligned)
 u32 32; 256 × 0x00          reserved footer
 ```
 
@@ -56,7 +56,7 @@ python server\web.py "D:\...\Modules\SandBoxCore\SceneObj\empire_town_s"
 ```
 
 3D view of terrain + navmesh. Click faces (shift = multi-select), delete faces,
-set face id / group, generate a navmesh from the terrain (whole map or a region),
+set face id / scene-level visibility mask, generate a navmesh from the terrain (whole map or a region),
 save back to `navmesh.bin` (first save keeps a `.bak`).
 
 ## MCP server (LLM-driven editing)
@@ -103,8 +103,21 @@ python tests\swap_dadg_map_navmesh.py restore  # put the original back
 
 ## Known unknowns
 
-- Face fields `g3` (dynamic face id) and `g5` (island/group) semantics are inferred,
-  not confirmed against engine code; generated meshes use `g3=0`, `g5=-1`.
+- `g5` is a signed scene-level visibility bitmask, confirmed against the native
+  editor inspector and level filters. It is not an island/group identifier.
+  The shipped SandBox Main_map uses `-109` on 13,304 of 17,153 faces; its other
+  masks are `-101` (3,564), `-103` (276), and `-69` (9). Native and DADG define
+  base=1, level_1=2, level_2=4, level_3=8, civilian=16, siege=32, looted=64.
+  `-109` enables base, level_1, and civilian among these levels. Preserve its
+  upper bits. Native variants and authored masks must not be normalized blindly.
+- New Main_map faces created through the web/MCP APIs default to `g5=-109`;
+  other scenes and the low-level terrain generator default to `-1` (all levels).
+  Existing masks are preserved on load/save. The API parameter is now
+  `scene_level_mask`; the obsolete `group` mutation parameter is rejected to
+  prevent island IDs from accidentally changing level visibility.
+- Campaign preview defaults to requiring base + level_1 + civilian. Disable the
+  level filter to inspect all faces, including intentionally restricted levels.
+  This models the visibility bits, not campaign pathfinding or native rendering.
 - The 24-byte edge records' `-1` slots are assumed runtime-filled adjacency.
 - Re-encoded LZ4 streams are valid LZ4 but not byte-identical to TaleWorlds' encoder
   output; payloads are byte-identical. In-game load test pending.

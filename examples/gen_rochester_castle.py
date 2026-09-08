@@ -1030,7 +1030,7 @@ def build_navmesh(heights, siege) -> NavMesh:
     mesh = from_heightmap(
         heights, world_size_x=WORLD, world_size_y=WORLD,
         cell_size=4.0, max_slope_deg=40.0,
-        face_id=2, group=100,
+        face_id=2, scene_level_mask=-1,
         region=(330.0, 250.0, 560.0, 560.0),
     )
 
@@ -1255,10 +1255,10 @@ def _author_breach(mesh, siege):
             n_added += 2
             # outside half (out_edge -> centre): overDebrisOutside
             mesh.faces.append(Face([ov_lo, ov_hi, mv_hi, mv_lo], [],
-                                   g1=2, g2=0, g3=oDO, g4=0, g5=100, g6=0))
+                                   g1=2, g2=0, g3=oDO, g4=0, g5=-1, g6=0))
             # inside half (centre -> in_edge): overDebrisInside
             mesh.faces.append(Face([mv_lo, mv_hi, iv_hi, iv_lo], [],
-                                   g1=2, g2=0, g3=oDI, g4=0, g5=100, g6=0))
+                                   g1=2, g2=0, g3=oDI, g4=0, g5=-1, g6=0))
             made += [mesh.faces[-2], mesh.faces[-1]]
         # Retag one centre inside-half face to overDebrisGeneric (rubble crest at
         # the wall line), matching Clun where oDG spans the wall centre.
@@ -1274,7 +1274,7 @@ def _author_breach(mesh, siege):
         wx, wy = to_world(-0.6, along_vals[2]); t3 = _add_vert(mesh, wx, wy, top_z)
         n_added += 4
         mesh.faces.append(Face([t0, t1, t2, t3], [],
-                               g1=2, g2=0, g3=oSW, g4=0, g5=100, g6=0))
+                               g1=2, g2=0, g3=oSW, g4=0, g5=-1, g6=0))
 
         report[side] = dict(pGO=pGO, pGI=pGI, oDO=oDO, oDI=oDI, oDG=oDG, oSW=oSW,
                             in_c=round(in_c, 1), out_c=round(out_c, 1),

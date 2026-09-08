@@ -1,6 +1,7 @@
 import { useStudioStore } from '../state/studioStore';
 import { useEntitiesStore } from '../state/entitiesStore';
 import type { ColorMode } from '../domain/terrainColors';
+import { NATIVE_CAMPAIGN_MASK, visibleInLevels } from '../domain/sceneLevels';
 import { Legend } from './Legend';
 import { SelInfo } from './SelInfo';
 import { EntInfo, SelInfoEnt, saveEntLabel } from './EntityInfo';
@@ -27,9 +28,16 @@ export function Panel() {
       <select id="colorMode" value={s.colorMode} onChange={(ev) => s.setColorMode(ev.target.value as ColorMode)}>
         <option value="editor">editor colours (Plain / Mountain / Lake / River)</option>
         <option value="terrain">terrain type / face id (g3)</option>
-        <option value="island">island (g5)</option>
+        <option value="levels">scene-level visibility mask (g5)</option>
       </select>
       <Legend />
+      {s.isCampaign && <>
+        <label><input id="campaignLevels" type="checkbox" checked={!!s.requiredSceneLevels}
+          onChange={() => s.toggleCampaignLevels()} />Native campaign levels: base + level_1 + civilian</label>
+        <small>{s.requiredSceneLevels
+          ? `${s.mesh?.scene_level_mask.filter((mask) => !visibleInLevels(mask, s.requiredSceneLevels)).length ?? 0} faces hidden by level filter`
+          : 'Showing faces from all scene levels'}. Legend counts all faces.</small>
+      </>}
       <label>
         <input id="rawNavmesh" type="checkbox" checked={s.rawNavmesh} onChange={() => s.toggleRawNavmesh()} />
         Raw mesh: no display lift, front faces only
@@ -38,6 +46,7 @@ export function Panel() {
 
       <hr style={{ borderColor: '#333' }} />
       <b>Generate from terrain</b>
+      {s.isCampaign && <small>New faces use Native campaign visibility ({NATIVE_CAMPAIGN_MASK}).</small>}
       <label>Cell size (m)</label>
       <input id="cellSize" value={s.cellSize} onChange={(ev) => s.setField('cellSize', ev.target.value)} />
       <label>Max slope (deg)</label>
@@ -52,8 +61,13 @@ export function Panel() {
       <SelInfo />
       <label>Face id / terrain type (g3)</label>
       <input id="faceId" value={s.faceId} onChange={(ev) => s.setField('faceId', ev.target.value)} />
-      <label>Island (g5)</label>
-      <input id="group" value={s.group} onChange={(ev) => s.setField('group', ev.target.value)} />
+      <label>Scene-level visibility mask (g5)</label>
+      <input id="group" placeholder="blank = keep existing" value={s.sceneLevelMask}
+        onChange={(ev) => s.setField('sceneLevelMask', ev.target.value)} />
+      <small>-1 enables all levels. This field does not identify islands.</small>
+      {s.isCampaign && <button className="dim" onClick={() => s.setField('sceneLevelMask', String(NATIVE_CAMPAIGN_MASK))}>
+        Use Native campaign levels
+      </button>}
       <button onClick={() => s.applyAttrs()}>Apply to selection</button>
       <button className="warn" onClick={() => s.deleteSelection()}>Delete selection</button>
 

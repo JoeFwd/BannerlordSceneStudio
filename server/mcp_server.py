@@ -16,6 +16,7 @@ import server.state as state
 from server import navmesh_diagnostics as diagnostics
 from blnav import generate
 from blnav.nmg9 import Face
+from blnav.scene_levels import default_scene_level_mask
 
 mcp = FastMCP(
     "bannerlord-navmesh",
@@ -23,7 +24,9 @@ mcp = FastMCP(
         "Generate and edit Mount & Blade II: Bannerlord navigation meshes. "
         "Workflow: load_scene(scene_dir) -> inspect (scene_info, query_faces, "
         "sample_height) -> generate_navmesh or edit faces -> save_navmesh. "
-        "Coordinates are world meters: X/Y ground plane, Z up."
+        "Coordinates are world meters: X/Y ground plane, Z up. "
+        "scene_level_mask (g5) is a visibility bitmask, never an island ID. "
+        "New Main_map faces default to Native campaign mask -109; other scenes to -1."
     ),
 )
 
@@ -85,7 +88,7 @@ def probe_navmesh_point(x: float, y: float) -> dict:
 @mcp.tool
 def query_faces(min_x: float, min_y: float, max_x: float, max_y: float, limit: int = 200) -> list[dict]:
     """List navmesh faces whose centroid lies in the world-space rectangle.
-    Each entry: index, centroid, vertex positions, face_id (g3), group (g5)."""
+    Each entry: index, centroid, vertex positions, face_id (g3), scene_level_mask (g5)."""
     sess = state.current()
     out = []
     for i, f in enumerate(sess.mesh.faces):
@@ -98,7 +101,7 @@ def query_faces(min_x: float, min_y: float, max_x: float, max_y: float, limit: i
                 "centroid": [round(cx, 2), round(cy, 2), round(sum(p[2] for p in pts) / len(pts), 2)],
                 "vertices": [[round(c, 2) for c in p] for p in pts],
                 "face_id": f.g3,
-                "group": f.g5,
+                "scene_level_mask": f.g5,
             })
             if len(out) >= limit:
                 break
@@ -114,7 +117,7 @@ def generate_navmesh(
     max_x: float | None = None,
     max_y: float | None = None,
     face_id: int = 0,
-    group: int = -1,
+    scene_level_mask: int | None = None,
     replace: bool = True,
 ) -> dict:
     """Generate a walkable navmesh from the scene terrain heightmap.
@@ -129,7 +132,10 @@ def generate_navmesh(
     gen = generate.from_heightmap(
         sess.heights, sess.params.world_size_x, sess.params.world_size_y,
         cell_size=cell_size, max_slope_deg=max_slope_deg,
-        face_id=face_id, group=group, region=region,
+        face_id=face_id,
+        scene_level_mask=(default_scene_level_mask(sess.scene_dir)
+                          if scene_level_mask is None else scene_level_mask),
+        region=region,
     )
     if replace:
         sess.mesh = gen
@@ -145,7 +151,7 @@ def generate_navmesh(
 
 
 @mcp.tool
-def add_face(vertices: list[list[float]], face_id: int = 0, group: int = -1) -> dict:
+def add_face(vertices: list[list[float]], face_id: int = 0, scene_level_mask: int | None = None) -> dict:
     """Add one polygon face (3-4 [x,y,z] world positions, counter-clockwise
     viewed from above). Vertices within 1cm of existing ones are reused."""
     sess = state.current()
@@ -159,7 +165,8 @@ def add_face(vertices: list[list[float]], face_id: int = 0, group: int = -1) -> 
         else:
             ids.append(len(mesh.vertices))
             mesh.vertices.append((p[0], p[1], p[2]))
-    mesh.faces.append(Face(ids, [], 2, 0, face_id, 0, group, 0))
+    mask = default_scene_level_mask(sess.scene_dir) if scene_level_mask is None else scene_level_mask
+    mesh.faces.append(Face(ids, [], 2, 0, face_id, 0, mask, 0))
     mesh.rebuild_edges()
     sess.dirty = True
     return {"face_index": len(mesh.faces) - 1, "vertex_ids": ids}
@@ -183,17 +190,17 @@ def delete_faces(face_indices: list[int]) -> dict:
 
 
 @mcp.tool
-def set_face_attributes(face_indices: list[int], face_id: int | None = None, group: int | None = None) -> int:
+def set_face_attributes(face_indices: list[int], face_id: int | None = None, scene_level_mask: int | None = None) -> int:
     """Set face_id (g3, used by SetAbilityOfFacesWithId to toggle faces at
-    runtime) and/or group (g5) on the given faces. Returns count changed."""
+    runtime) and/or scene_level_mask (g5 visibility bits, not an island ID) on the given faces. Returns count changed."""
     sess = state.current()
     n = 0
     for i in face_indices:
         f = sess.mesh.faces[i]
         if face_id is not None:
             f.g3 = face_id
-        if group is not None:
-            f.g5 = group
+        if scene_level_mask is not None:
+            f.g5 = scene_level_mask
         n += 1
     sess.dirty = n > 0
     return n

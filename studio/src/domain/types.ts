@@ -45,7 +45,7 @@ export interface MeshResponse {
   vertices: number[];   // flat [x,y,z, x,y,z, ...]
   faces: number[][];    // each face: vertex ids (>=3)
   face_id: number[];    // g3 per face
-  group: number[];      // g5 per face
+  scene_level_mask: number[]; // signed g5 scene-level visibility bits per face
 }
 
 export interface TerrainResponse {

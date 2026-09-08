@@ -23,10 +23,10 @@ with sync_playwright() as p:
     tip = page.inner_text("#tip") if page.is_visible("#tip") else "(no hit)"
     print("tooltip:", tip)
 
-    # island mode still renders a legend
-    page.select_option("#colorMode", "island")
+    # levels mode still renders a legend
+    page.select_option("#colorMode", "levels")
     page.wait_for_timeout(200)
-    print("island legend:\n" + page.inner_text("#legend"))
+    print("levels legend:\n" + page.inner_text("#legend"))
     page.select_option("#colorMode", "terrain")
     page.wait_for_timeout(200)
 

@@ -8,6 +8,7 @@ import { buildNavmesh, repaintNavmesh, type BuiltNavmesh } from './builders';
 import { sceneRefs } from './sceneRefs';
 import { interaction } from './interaction';
 import { tip } from '../ui/tip';
+import type { MeshResponse } from '../domain/types';
 import { NAVMESH_LIFT } from '../domain/constants';
 
 const ray = new THREE.Raycaster();
@@ -22,15 +23,16 @@ export function Navmesh() {
   const colorMode = useStudioStore((s) => s.colorMode);
   const selection = useStudioStore((s) => s.selection);
   const isCampaign = useStudioStore((s) => s.isCampaign);
+  const requiredSceneLevels = useStudioStore((s) => s.requiredSceneLevels);
   const rawNavmesh = useStudioStore((s) => s.rawNavmesh);
   const selectFaceAt = useStudioStore((s) => s.selectFaceAt);
   const clearSelection = useStudioStore((s) => s.clearSelection);
 
   const built = useMemo<BuiltNavmesh | null>(
-    () => (mesh ? buildNavmesh(mesh, selection, colorMode, isCampaign) : null),
+    () => (mesh ? buildNavmesh(mesh, selection, colorMode, isCampaign, requiredSceneLevels) : null),
     // Rebuild only on new mesh data; selection/colorMode drive repaint, not rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mesh],
+    [mesh, requiredSceneLevels],
   );
   const builtRef = useRef<BuiltNavmesh | null>(null);
   builtRef.current = built;
@@ -45,10 +47,12 @@ export function Navmesh() {
     material.needsUpdate = true;
   }, [built, rawNavmesh]);
 
+  const framedMesh = useRef<MeshResponse | null>(null);
   // Register the pickable surface + frame the camera once per new mesh.
   useEffect(() => {
     sceneRefs.navMesh = built ? built.navMesh : null;
-    if (built && built.boundingSphere && controls) {
+    if (built && built.boundingSphere && controls && framedMesh.current !== mesh) {
+      framedMesh.current = mesh;
       const bs = built.boundingSphere;
       controls.target.copy(bs.center);
       camera.position.set(bs.center.x + bs.radius, bs.center.y + bs.radius * 0.9, bs.center.z + bs.radius);
@@ -58,7 +62,7 @@ export function Navmesh() {
     return () => {
       if (sceneRefs.navMesh === (built && built.navMesh)) sceneRefs.navMesh = null;
     };
-  }, [built, camera, controls]);
+  }, [built, camera, controls, mesh]);
 
   // Repaint vertex colours when selection or colour mode changes.
   useEffect(() => {
@@ -83,7 +87,7 @@ export function Navmesh() {
       const hit = ray.intersectObject(b.navMesh)[0];
       if (!hit || hit.faceIndex == null) { tip.hide(); return; }
       const fi = b.triToFace[hit.faceIndex];
-      tip.show(faceLabel(fi, { isCampaign, faceId: mesh.face_id, group: mesh.group }), e.clientX, e.clientY);
+      tip.show(faceLabel(fi, { isCampaign, faceId: mesh.face_id, sceneLevelMask: mesh.scene_level_mask }), e.clientX, e.clientY);
     };
     const onDown = (e: PointerEvent) => { downAt = [e.clientX, e.clientY]; };
     const onUp = (e: PointerEvent) => {

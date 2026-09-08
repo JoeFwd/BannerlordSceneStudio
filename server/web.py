@@ -17,7 +17,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Ensure ES module scripts are served with a JavaScript MIME type (some Windows
 # registries map .js to text/plain, which browsers reject for `type="module"`).
@@ -31,6 +31,7 @@ from server.placement import model as placement_model
 from server.placement import repository as placement_repo
 from blnav import generate
 from blnav.nmg9 import Face
+from blnav.scene_levels import default_scene_level_mask
 
 app = FastAPI(title="bannerlord-navmesh-studio")
 STATIC = Path(__file__).parent / "static"
@@ -115,7 +116,7 @@ def api_mesh():
         "vertices": [c for v in sess.mesh.vertices for c in v],
         "faces": [f.vertex_ids for f in sess.mesh.faces],
         "face_id": [f.g3 for f in sess.mesh.faces],
-        "group": [f.g5 for f in sess.mesh.faces],
+        "scene_level_mask": [f.g5 for f in sess.mesh.faces],
     }
 
 
@@ -152,6 +153,7 @@ def api_terrain(max_dim: int = 256):
 
 
 class GenReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     cell_size: float = 4.0
     max_slope_deg: float = 40.0
     min_x: float | None = None
@@ -159,7 +161,7 @@ class GenReq(BaseModel):
     max_x: float | None = None
     max_y: float | None = None
     face_id: int = 0
-    group: int = -1
+    scene_level_mask: int | None = None
     replace: bool = True
 
 
@@ -174,7 +176,10 @@ def api_generate(req: GenReq):
     gen = generate.from_heightmap(
         sess.heights, sess.params.world_size_x, sess.params.world_size_y,
         cell_size=req.cell_size, max_slope_deg=req.max_slope_deg,
-        face_id=req.face_id, group=req.group, region=region,
+        face_id=req.face_id,
+        scene_level_mask=(default_scene_level_mask(sess.scene_dir)
+                          if req.scene_level_mask is None else req.scene_level_mask),
+        region=region,
     )
     if req.replace:
         sess.mesh = gen
@@ -191,9 +196,10 @@ def api_generate(req: GenReq):
 
 
 class FacesReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     indices: list[int]
     face_id: int | None = None
-    group: int | None = None
+    scene_level_mask: int | None = None
 
 
 @app.post("/api/delete_faces")
@@ -219,8 +225,8 @@ def api_set_attrs(req: FacesReq):
     for i in req.indices:
         if req.face_id is not None:
             sess.mesh.faces[i].g3 = req.face_id
-        if req.group is not None:
-            sess.mesh.faces[i].g5 = req.group
+        if req.scene_level_mask is not None:
+            sess.mesh.faces[i].g5 = req.scene_level_mask
     sess.dirty = True
     sess.land_oracle = None
     return {"changed": len(req.indices)}

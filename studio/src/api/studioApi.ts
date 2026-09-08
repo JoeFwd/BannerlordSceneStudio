@@ -38,8 +38,8 @@ export const studioApi = {
   browse: () => request<{ path: string | null }>('/api/browse'),
 
   generate: (req: GenerateReq) => request<Info>('/api/generate', req),
-  setAttrs: (indices: number[], face_id: number, group: number) =>
-    request<{ changed: number }>('/api/set_attrs', { indices, face_id, group }),
+  setAttrs: (indices: number[], face_id: number, scene_level_mask?: number) =>
+    request<{ changed: number }>('/api/set_attrs', { indices, face_id, scene_level_mask }),
   deleteFaces: (indices: number[]) => request<Info>('/api/delete_faces', { indices }),
   saveMesh: () => request<{ path: string }>('/api/save', {}),
 

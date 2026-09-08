@@ -22,7 +22,7 @@ def from_heightmap(
     cell_size: float = 4.0,
     max_slope_deg: float = 40.0,
     face_id: int = 0,
-    group: int = -1,
+    scene_level_mask: int = -1,
     origin_x: float = 0.0,
     origin_y: float = 0.0,
     region: tuple[float, float, float, float] | None = None,
@@ -31,6 +31,7 @@ def from_heightmap(
 
     heights: (H, W) array covering [0, world_size_x] x [0, world_size_y].
     region: optional (min_x, min_y, max_x, max_y) world-space clip.
+    scene_level_mask: signed g5 visibility bits, never an island identifier.
     """
     H, W = heights.shape
     sx = (W - 1) / world_size_x
@@ -88,7 +89,7 @@ def from_heightmap(
                 corner(ix + 1, iy + 1),
                 corner(ix, iy + 1),
             ]
-            mesh.faces.append(Face(vids, [], g1=2, g2=0, g3=face_id, g4=0, g5=group, g6=0))
+            mesh.faces.append(Face(vids, [], g1=2, g2=0, g3=face_id, g4=0, g5=scene_level_mask, g6=0))
 
     mesh.rebuild_edges()
     return mesh

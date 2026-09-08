@@ -4,6 +4,7 @@
 // maths (colours, coords, sizing) comes from the pure domain/ modules.
 import * as THREE from 'three';
 import type { MeshResponse, Settlement, TerrainResponse } from '../domain/types';
+import { visibleInLevels } from '../domain/sceneLevels';
 import { W2T } from '../domain/coords';
 import {
   MARK_LIFT, NAVMESH_LIFT, GEO, FP_COL, FP_FALLBACK, LABEL_SCALE,
@@ -49,15 +50,17 @@ export interface BuiltNavmesh {
 }
 
 function ctxFrom(mesh: MeshResponse, selection: Set<number>, colorMode: FaceColorContext['colorMode'], isCampaign: boolean): FaceColorContext {
-  return { colorMode, isCampaign, faceId: mesh.face_id, group: mesh.group, selection };
+  return { colorMode, isCampaign, faceId: mesh.face_id, sceneLevelMask: mesh.scene_level_mask, selection };
 }
 
 export function buildNavmesh(
   mesh: MeshResponse, selection: Set<number>, colorMode: FaceColorContext['colorMode'], isCampaign: boolean,
+  requiredSceneLevels = 0,
 ): BuiltNavmesh {
   const triToFace: number[] = [];
   const tris: number[] = [];
   for (let fi = 0; fi < mesh.faces.length; fi++) {
+    if (!visibleInLevels(mesh.scene_level_mask[fi], requiredSceneLevels)) continue;
     const ids = mesh.faces[fi];
     for (let k = 2; k < ids.length; k++) { tris.push(ids[0], ids[k - 1], ids[k]); triToFace.push(fi); }
   }
@@ -81,7 +84,9 @@ export function buildNavmesh(
   // invents diagonals on non-planar quads and hides coplanar face boundaries.
   const edgePositions: number[] = [];
   const seenEdges = new Set<string>();
-  for (const ids of mesh.faces) {
+  for (let fi = 0; fi < mesh.faces.length; fi++) {
+    if (!visibleInLevels(mesh.scene_level_mask[fi], requiredSceneLevels)) continue;
+    const ids = mesh.faces[fi];
     if (ids.length < 3) continue;
     for (let k = 0; k < ids.length; k++) {
       const a = ids[k], b = ids[(k + 1) % ids.length];
@@ -102,7 +107,7 @@ export function buildNavmesh(
   const group = new THREE.Group();
   group.add(navMesh); group.add(edges);
   let boundingSphere: THREE.Sphere | null = null;
-  if (mesh.vertices.length) { geo.computeBoundingSphere(); boundingSphere = geo.boundingSphere; }
+  if (tris.length) { geo.computeBoundingSphere(); boundingSphere = geo.boundingSphere; }
   return { group, navMesh, colorAttr, triToFace, boundingSphere };
 }
 
