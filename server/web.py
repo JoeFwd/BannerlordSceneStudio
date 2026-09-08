@@ -238,7 +238,10 @@ class SaveReq(BaseModel):
 
 @app.post("/api/save")
 def api_save(req: SaveReq):
-    return {"path": _sess().save(req.out_path)}
+    try:
+        return {"path": _sess().save(req.out_path)}
+    except state.StaleSceneError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import hashlib
+import tempfile
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -15,6 +17,18 @@ import numpy as np
 from blnav import nmg9, rnm1
 from blnav.terrain import Terrain
 from blnav.xscene import TerrainParams, read_terrain_params
+
+
+class StaleSceneError(RuntimeError):
+    """The working mesh no longer matches the file from which it was loaded."""
+
+
+def _fingerprint(path: str) -> str | None:
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except FileNotFoundError:
+        return None
 
 
 @dataclass
@@ -28,6 +42,7 @@ class SceneSession:
     entity_moves: dict = field(default_factory=dict)  # id -> (x, y) staged moves
     footprint: object | None = None            # cached placement.model.Footprint
     land_oracle: object | None = None          # cached placement.model.LandOracle
+    source_fingerprint: str | None = None
 
     @property
     def navmesh_path(self) -> str:
@@ -49,9 +64,29 @@ class SceneSession:
 
     def save(self, out_path: str | None = None, backup: bool = True) -> str:
         path = out_path or self.navmesh_path
-        if backup and os.path.exists(path) and not os.path.exists(path + ".bak"):
-            shutil.copy2(path, path + ".bak")
-        rnm1.write(path, self.mesh.serialize())
+        is_source = os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(self.navmesh_path))
+
+        def check_source():
+            if is_source and _fingerprint(path) != self.source_fingerprint:
+                raise StaleSceneError("navmesh.bin changed on disk since this scene was loaded. Reload the scene before saving.")
+
+        check_source()
+        fd, pending = tempfile.mkstemp(prefix=".navmesh-studio-", suffix=".tmp", dir=os.path.dirname(os.path.abspath(path)))
+        os.close(fd)
+        try:
+            rnm1.write(pending, self.mesh.serialize())
+            with open(pending, "rb+") as fh:
+                os.fsync(fh.fileno())
+            written_fingerprint = _fingerprint(pending)
+            check_source()
+            if backup and os.path.exists(path) and not os.path.exists(path + ".bak"):
+                shutil.copy2(path, path + ".bak")
+            os.replace(pending, path)
+        finally:
+            if os.path.exists(pending):
+                os.unlink(pending)
+        if is_source:
+            self.source_fingerprint = written_fingerprint
         self.dirty = False
         return path
 
@@ -71,7 +106,10 @@ def load_scene(scene_dir: str) -> SceneSession:
         grid = terr.heightmap_grid((sess.params.node_dim_x, sess.params.node_dim_y))
         sess.heights = sess.params.decode_heights(grid)
     if os.path.exists(sess.navmesh_path):
+        sess.source_fingerprint = _fingerprint(sess.navmesh_path)
         sess.mesh = nmg9.NavMesh.parse(rnm1.read(sess.navmesh_path))
+        if _fingerprint(sess.navmesh_path) != sess.source_fingerprint:
+            raise StaleSceneError("navmesh.bin changed while loading. Load the scene again.")
     _current = sess
     return sess
 
