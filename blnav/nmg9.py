@@ -1,12 +1,13 @@
-"""NMG9 navigation mesh model: parse / edit / serialize.
+"""NMG8/NMG9 scene navigation mesh model: parse / edit / serialize.
 
 Layout (little-endian, decompressed payload of navmesh.bin):
 
-    'NMG9'
+    'NMG8' or 'NMG9'
     u32 vertex_count
     vertex_count * { f32 x, y, z }
     u32 edge_count
-    edge_count * { i32 -1; u32 va; u32 vb; i32 -1; i32 -1; u32 0 }
+    edge_count * { i32 -1; u32 va; u32 vb; i32 -1; i32 -1 }
+        followed by u32 0 per edge in NMG9 only (20 / 24 bytes)
     u32 face_count
     face_count * { u32 n; n*u32 vertex_ids; n*u32 edge_ids;
                    i32 g1; i32 g2; i32 g3; i32 g4; i32 g5; u8 g6 }
@@ -14,6 +15,7 @@ Layout (little-endian, decompressed payload of navmesh.bin):
 
 Face records are NOT 4-byte aligned (21-byte tail).
 The -1 slots in edge records are runtime adjacency, always -1 on disk.
+This scene format is distinct from the size-prefixed triangle prefab in nmg8.py.
 """
 from __future__ import annotations
 
@@ -21,6 +23,8 @@ import struct
 from dataclasses import dataclass, field
 
 MAGIC = b"NMG9"
+MAGICS = {8: b"NMG8", 9: MAGIC}
+EDGE_RECORDS = {8: struct.Struct("<i2I2i"), 9: struct.Struct("<i2I2iI")}
 FOOTER = struct.pack("<I", 32) + b"\x00" * 256
 
 
@@ -47,31 +51,46 @@ class NavMesh:
     vertices: list[tuple[float, float, float]] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
     faces: list[Face] = field(default_factory=list)
+    version: int = 9  # preserve loaded scene format; new meshes use NMG9
 
     @classmethod
     def parse(cls, data: bytes) -> "NavMesh":
-        if data[:4] != MAGIC:
-            raise ValueError(f"bad magic {data[:4]!r}, expected {MAGIC!r}")
-        mesh = cls()
+        magic = data[:4]
+        if magic not in MAGICS.values():
+            raise ValueError(f"bad scene magic {magic!r}, expected b'NMG8' or b'NMG9'")
+        mesh = cls(version=8 if magic == b"NMG8" else 9)
+        edge_record = EDGE_RECORDS[mesh.version]
         i = 4
+
+        def require(size: int, section: str) -> None:
+            if i + size > len(data):
+                raise ValueError(f"truncated {section} at 0x{i:X}: need {size} bytes")
+
+        require(4, "vertex count")
         (vcount,) = struct.unpack_from("<I", data, i)
         i += 4
+        require(vcount * 12, "vertices")
         mesh.vertices = [struct.unpack_from("<3f", data, i + k * 12) for k in range(vcount)]
         i += vcount * 12
+        require(4, "edge count")
         (ecount,) = struct.unpack_from("<I", data, i)
         i += 4
+        require(ecount * edge_record.size, "edges")
         for _ in range(ecount):
-            f0, va, vb, f3, f4, f5 = struct.unpack_from("<i2I2iI", data, i)
-            if f0 != -1 or f3 != -1 or f4 != -1 or f5 != 0:
-                raise ValueError(f"unexpected edge record fields at 0x{i:X}: {(f0, f3, f4, f5)}")
+            f0, va, vb, f3, f4, *flags = edge_record.unpack_from(data, i)
+            if f0 != -1 or f3 != -1 or f4 != -1 or any(flags):
+                raise ValueError(f"unexpected edge record fields at 0x{i:X}: {(f0, f3, f4, *flags)}")
             mesh.edges.append(Edge(va, vb))
-            i += 24
+            i += edge_record.size
+        require(4, "face count")
         (fcount,) = struct.unpack_from("<I", data, i)
         i += 4
         for k in range(fcount):
+            require(4, f"face {k} vertex count")
             (n,) = struct.unpack_from("<I", data, i)
             if not 3 <= n <= 64:
                 raise ValueError(f"face {k}: implausible vertex count {n} at 0x{i:X}")
+            require(4 + 8 * n + 21, f"face {k}")
             verts = list(struct.unpack_from(f"<{n}I", data, i + 4))
             eids = list(struct.unpack_from(f"<{n}I", data, i + 4 + n * 4))
             g1, g2, g3, g4, g5 = struct.unpack_from("<5i", data, i + 4 + n * 8)
@@ -83,14 +102,18 @@ class NavMesh:
         return mesh
 
     def serialize(self) -> bytes:
+        if self.version not in MAGICS:
+            raise ValueError(f"unsupported scene navmesh version {self.version!r}")
+        edge_record = EDGE_RECORDS[self.version]
         out = bytearray()
-        out += MAGIC
+        out += MAGICS[self.version]
         out += struct.pack("<I", len(self.vertices))
         for v in self.vertices:
             out += struct.pack("<3f", *v)
         out += struct.pack("<I", len(self.edges))
         for e in self.edges:
-            out += struct.pack("<i2I2iI", -1, e.va, e.vb, -1, -1, 0)
+            flags = (0,) if self.version == 9 else ()
+            out += edge_record.pack(-1, e.va, e.vb, -1, -1, *flags)
         out += struct.pack("<I", len(self.faces))
         for f in self.faces:
             n = len(f.vertex_ids)
@@ -119,7 +142,7 @@ class NavMesh:
 
     def to_obj(self) -> str:
         """Wavefront OBJ (faces as polygons; Bannerlord X,Y,Z kept as-is)."""
-        lines = ["# blnav NMG9 export"]
+        lines = [f"# blnav NMG{self.version} export"]
         for x, y, z in self.vertices:
             lines.append(f"v {x} {y} {z}")
         for f in self.faces:

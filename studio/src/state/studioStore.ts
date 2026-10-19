@@ -12,6 +12,13 @@ function isCampaignScene(sceneDir: string): boolean {
 function statsFrom(info: Info): string {
   const s = info.navmesh;
   let txt = `scene: ${info.scene_dir}\nfaces: ${s.faces}  verts: ${s.vertices}  edges: ${s.edges}`;
+  const v = info.navmesh_validation;
+  txt += v.passed
+    ? '\nvalidation: OK'
+    : `\nvalidation: ${v.error_count} ERRORS (${v.invalid_triangle_or_quad_face_count} non-tri/quad faces, ${v.isolated_vertex_count} isolated vertices)`;
+  if (v.warning_count) {
+    txt += `\ntopology smell: ${v.warning_count} degree >4 vertices`;
+  }
   if (info.terrain) txt += `\nterrain: ${info.terrain.world_size_x}x${info.terrain.world_size_y} m`;
   txt += info.dirty ? '\n[UNSAVED CHANGES]' : '';
   return txt;

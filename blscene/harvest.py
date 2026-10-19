@@ -345,12 +345,16 @@ class EntityCluster:
         clearances: parallel list of per-entity ground clearance (world Z minus
             source terrain height at the entity's XY) captured at harvest time.
         source: "module/scene" provenance string.
+        group_objects: the source scene's editor group declarations
+            ({guid: name}), so placement can declare the groups the copied
+            ``<edit_mode_data>`` references.
     """
 
     elements: list[ET.Element] = field(default_factory=list)
     offsets: list[tuple[float, float]] = field(default_factory=list)
     clearances: list[float] = field(default_factory=list)
     source: str = ""
+    group_objects: dict[str, str] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.elements)
@@ -399,7 +403,7 @@ def harvest_entities(
 
     scene = Scene.load(os.path.join(scene_dir, "scene.xscene"))
     source = "/".join(os.path.normpath(scene_dir).split(os.sep)[-3:-1] + [os.path.basename(scene_dir)])
-    cluster = EntityCluster(source=source)
+    cluster = EntityCluster(source=source, group_objects=scene.group_objects)
 
     for ent in scene.entities:
         pos = ent.position
@@ -490,6 +494,17 @@ def place_entities(
         xform = new_elem.find("transform")
         if xform is None:
             continue
+
+        # Declare the groups the copied subtree references (an orphan
+        # group_object_guid crashes the editor); drop undeclarable ones.
+        for emd in new_elem.iter("edit_mode_data"):
+            guid = emd.get("group_object_guid")
+            if not guid:
+                continue
+            if guid in cluster.group_objects:
+                scene.add_group_object(guid, cluster.group_objects[guid])
+            else:
+                del emd.attrib["group_object_guid"]
 
         rdx, rdy = _rotate_xy(dx, dy, cos_t, sin_t)
         wx = x + rdx

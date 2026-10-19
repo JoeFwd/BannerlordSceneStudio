@@ -17,14 +17,21 @@ export function labelWorldHeight(onPx: number, dist: number, wppUnit: number): n
   return onPx * dist * wppUnit;
 }
 
-// Distance fade: full opacity near, transparent far, linear between.
-export function labelFade(dist: number, panRefDist: number): number {
-  if (!panRefDist) return 1;
-  const near = panRefDist * FADE_NEAR;
-  const far = panRefDist * FADE_FAR;
-  if (dist <= near) return 1;
-  if (dist >= far) return 0;
-  return (far - dist) / (far - near);
+// Zoom fade: one global opacity from how far in you've zoomed, NOT per-label
+// distance. `zoomDist` is the live camera->target distance; `fullViewDist` is the
+// frozen full-view framing distance. Full white once you've zoomed to reading
+// distance (<60% of full view), transparent as you pull back toward full view.
+// This is deliberately label-independent: a distant label is exactly as bright as
+// a near one at the same zoom, so panning across the map never leaves one name
+// stuck white (the old per-label distance model scaled its "far" cutoff to the
+// whole map, so far labels never dimmed).
+export function labelFade(zoomDist: number, fullViewDist: number): number {
+  if (!fullViewDist) return 1;
+  const near = fullViewDist * FADE_NEAR;
+  const far = fullViewDist * FADE_FAR;
+  if (zoomDist <= near) return 1;
+  if (zoomDist >= far) return 0;
+  return (far - zoomDist) / (far - near);
 }
 
 export function labelOpacity(fade: number): number {

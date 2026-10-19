@@ -1,4 +1,4 @@
-"""RNM1 container (navmesh.bin): LZ4-block-compressed NMG9 payload.
+"""RNM1 container (navmesh.bin): LZ4-block-compressed NMG8/NMG9 scene payload.
 
     0x00 'RNM1'
     0x04 u32  file_size - 8
@@ -22,7 +22,7 @@ VERSION = 3
 
 
 def read(path: str) -> bytes:
-    """Return decompressed NMG9 payload from a navmesh.bin file."""
+    """Return decompressed NMG8/NMG9 scene payload from a navmesh.bin file."""
     with open(path, "rb") as fh:
         data = fh.read()
     if data[:4] != MAGIC:
@@ -35,7 +35,7 @@ def read(path: str) -> bytes:
 
 
 def write(path: str, payload: bytes) -> None:
-    """Compress an NMG9 payload and write a navmesh.bin container."""
+    """Compress a scene navmesh payload and write a navmesh.bin container."""
     comp = lz4.block.compress(payload, mode="high_compression", store_size=False)
     total = HEADER_SIZE + len(comp)
     hdr = struct.pack(

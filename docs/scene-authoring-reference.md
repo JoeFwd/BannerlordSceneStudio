@@ -8,6 +8,54 @@
 - Scene registration works by filename; overriding existing scenes replaces default game content
 - Caution: Overriding prefabs may break existing scripts if entity hierarchy changes
 
+**Editor-only data — the two-copy rule** (verified 2026-08-17 on `dadg_joust_v3`)
+
+A scene stores its content twice, and *only the runtime copy is what the game reads*:
+
+| Concern | Editor source | Runtime |
+|---|---|---|
+| Terrain | `SceneEditData/<scene>/terrain_ed.bin` — magic `OK01` | `SceneObj/<scene>/terrain.bin` — magic `ZGR6RTRN` |
+| Entities | `<editor_data>` + per-entity `<edit_mode_data>` in `scene.xscene` | every other node in `scene.xscene` |
+
+Tools that write only `SceneObj/` therefore produce a scene that **plays correctly but is
+stale or fatal in the editor**. The two terrain formats are unrelated encodings; this repo
+writes `ZGR6` only (`blnav/terrain_write.py`), so `terrain_ed.bin` stays whatever donor copy
+was seeded. Consequences when such a scene is opened in the Modding Kit:
+
+- The editor renders the **donor** terrain, not the generated one.
+- **Saving terrain in the editor regenerates `terrain.bin` from `terrain_ed.bin` and destroys
+  the generated terrain.** Back up `terrain.bin` before opening a composed scene.
+
+**Group-object invariant** — every `edit_mode_data/@group_object_guid` must be declared as a
+`editor_data/group_objects/group_object/@guid` **in the same scene**. An undeclared GUID makes
+the editor dereference a null group on scene load:
+
+```
+Faulting application: TaleWorlds.MountAndBlade.Launcher.exe (bin\Win64_Shipping_wEditor)
+Faulting module:      TaleWorlds.Native.dll
+Exception code:       0xc0000005 (access violation)
+```
+
+The runtime never reads `edit_mode_data`, so the scene loads and plays perfectly — the defect
+is invisible until someone opens the editor. Copying entity subtrees between scenes drags
+`edit_mode_data` along with them, but `<editor_data>` is a *single top-level node* that merge
+code overwrites wholesale instead of unioning. Multi-donor composition is the trigger.
+
+Validate before shipping any composed or merged scene:
+
+```python
+import xml.etree.ElementTree as ET
+r = ET.parse("scene.xscene").getroot()
+declared = {g.get("guid") for g in r.iter("group_object")}
+used = {e.get("group_object_guid") for e in r.iter("edit_mode_data")} - {None}
+assert not (used - declared), f"orphan group guids: {used - declared}"
+```
+
+Fix by **declaring the missing group** (preserves the grouping), not by stripping the
+attribute. Note `scene.xscene` is CRLF, tab-indented, self-closing tags with no space before
+`/>`, and has no BOM — `ElementTree.tostring` / .NET `OuterXml` re-serialize and will not match
+the on-disk bytes, so anchor byte-level edits on the raw text.
+
 **Terrain Structure** (moddocs: editor/scene-editor/terrain_creation)
 - Node-based system with configurable node count, resolution, and size
 - Import/export supports 8-bit and 16-bit heightmaps (PNG/RAW), materialmaps (grayscale), debris, flowmap, vegetation, bedrock layers
@@ -125,6 +173,11 @@
 5. Spawn points not encompassed by navmesh won't function
 6. Scene load verification: `if (!Mission.Current.IsLoadingFinished || Agent.Main == null) return;`
 7. Editor planes block sunlight in interiors; seasons adjustable via editor settings
+8. Cross-scene entity copies drag the donor's `group_object_guid` with them; if the receiving
+   scene's `<editor_data>` came from a *different* donor, the editor AVs on load while the game
+   is fine (see "Editor-only data — the two-copy rule" above)
+9. Generated terrain lives only in `terrain.bin`; the editor edits `terrain_ed.bin` and will
+   overwrite generated terrain on save. No `OK01` writer exists yet
 
 ## References
 

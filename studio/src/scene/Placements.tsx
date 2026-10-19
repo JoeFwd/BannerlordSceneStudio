@@ -45,11 +45,16 @@ export function Placements() {
     if (!visible) { interaction.overMarker = false; tip.hide(); }
   }, [built, visible]);
 
-  // Constant-on-screen label sizing + distance fade, every frame.
+  // Constant-on-screen label sizing (per label) + one global zoom fade, every frame.
   useFrame(() => {
     const labelsOn = useEntitiesStore.getState().labelsOn;
-    const ref = sceneRefs.panRefDist || 0;
     const wpp = worldPerPixelUnit(camera.fov, innerHeight);
+    // Global fade from the live zoom level (camera->target), applied to every label
+    // equally so a distant name is never left brighter than a near one.
+    const zoomDist = controls ? camera.position.distanceTo(controls.target) : (sceneRefs.panRefDist || 0);
+    const fade = labelFade(zoomDist, sceneRefs.panRefDist || 0);
+    const op = labelOpacity(fade);
+    const on = labelsOn && fade > 0.02;
     for (const r of sceneRefs.markers) {
       const spr = r.label;
       if (!spr) continue;
@@ -58,9 +63,8 @@ export function Placements() {
       const d = camera.position.distanceTo(p.position);
       const h = labelWorldHeight(spr.userData.onPx as number, d, wpp);
       spr.scale.set(h * (spr.userData.aspect as number), h, 1);
-      const fade = labelFade(d, ref);
-      (spr.material as THREE.SpriteMaterial).opacity = labelOpacity(fade);
-      spr.visible = labelsOn && fade > 0.02;
+      (spr.material as THREE.SpriteMaterial).opacity = op;
+      spr.visible = on;
     }
   });
 

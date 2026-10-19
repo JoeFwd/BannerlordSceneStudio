@@ -573,6 +573,11 @@ class SceneBuilder:
 
         Deep-copies their XML subtree and applies *offset* to position.
 
+        Editor <edit_mode_data> travels with the copied subtree, so any
+        group_object_guid it carries is declared here from the source scene's
+        <editor_data><group_objects>; an orphan GUID crashes the editor on
+        scene load.  GUIDs the source itself never declares are dropped.
+
         Args:
             src_scene_path: path to source scene.xscene file.
             prefab: filter by prefab name (exact match).
@@ -585,9 +590,22 @@ class SceneBuilder:
         ent_elem = self._scene._entities_elem
         children = list(ent_elem)
         dx, dy, dz = offset
+        src_groups = src.group_objects
 
         for src_ent in matched:
             new_elem = copy.deepcopy(src_ent._element)
+
+            # Carry over the source scene's declarations for any group the
+            # copied subtree references (or drop undeclarable references).
+            for emd in new_elem.iter("edit_mode_data"):
+                guid = emd.get("group_object_guid")
+                if not guid:
+                    continue
+                if guid in src_groups:
+                    self._scene.add_group_object(guid, src_groups[guid])
+                else:
+                    del emd.attrib["group_object_guid"]
+
             # Apply offset if entity has a transform/position
             xform = new_elem.find("transform")
             if xform is not None:
@@ -659,6 +677,16 @@ class SceneBuilder:
 
         # --- Validate sp_* entities are within terrain bounds ---
         self._validate_sp_entities(scene_dir)
+
+        # --- Validate editor group objects (orphan GUID = editor crash) ---
+        orphans = self._scene.used_group_guids - set(self._scene.group_objects)
+        if orphans:
+            raise ValueError(
+                f"scene {self._name!r} has edit_mode_data group_object_guid values "
+                f"not declared in <editor_data><group_objects>: "
+                + ", ".join(sorted(orphans))
+                + " — the Modding Kit editor would crash loading this scene"
+            )
 
         written_files: list[str] = []
 

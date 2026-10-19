@@ -29,10 +29,22 @@ export interface NavmeshStats {
   edges: number;
 }
 
+export interface NavmeshValidationSummary {
+  passed: boolean;
+  error_count: number;
+  warning_count: number;
+  invalid_triangle_or_quad_face_count: number;
+  over_connected_vertex_count: number;
+  isolated_vertex_count: number;
+  degree_definition: string;
+  maximum_vertex_degree: number;
+}
+
 export interface Info {
   scene_dir: string;
   dirty: boolean;
   navmesh: NavmeshStats;
+  navmesh_validation: NavmeshValidationSummary;
   terrain?: {
     world_size_x: number;
     world_size_y: number;

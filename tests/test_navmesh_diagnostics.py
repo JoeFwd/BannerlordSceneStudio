@@ -50,6 +50,44 @@ class DiagnosticsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             diagnostics.inspect_region(self.sess, 1, 0, 0, 1)
 
+    def test_topology_validation_reports_each_required_error(self):
+        mesh = NavMesh()
+        mesh.vertices = [
+            (0., 0., 0.),
+            (1., 0., 0.), (.3, .95, 0.), (-.8, .6, 0.),
+            (-.8, -.6, 0.), (.3, -.95, 0.),
+            (20., 20., 0.),
+        ]
+        mesh.faces = [
+            Face([0, 1, 2], []), Face([0, 2, 3], []),
+            Face([0, 3, 4], []), Face([0, 4, 5], []),
+            Face([0, 5, 1], []), Face([1, 2, 3, 4, 5], []),
+        ]
+        mesh.rebuild_edges()
+
+        result = diagnostics.validate_topology(mesh)
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_count"], 2)
+        self.assertEqual(result["warning_count"], 1)
+        self.assertEqual(result["invalid_triangle_or_quad_faces"], [
+            {"face_index": 5, "vertex_count": 5},
+        ])
+        self.assertEqual(result["high_degree_vertices"], [
+            {"vertex_id": 0, "degree": 5},
+        ])
+        self.assertEqual(result["isolated_vertices"], [
+            {"vertex_id": 6, "degree": 0},
+        ])
+
+    def test_topology_validation_summary_omits_large_error_lists(self):
+        result = diagnostics.validate_topology(self.sess.mesh, include_errors=False)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["error_count"], 1)
+        self.assertEqual(result["warning_count"], 0)
+        self.assertEqual(result["isolated_vertex_count"], 1)
+        self.assertNotIn("over_connected_vertices", result)
+
 
 if __name__ == "__main__":
     unittest.main()

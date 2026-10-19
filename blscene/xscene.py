@@ -318,6 +318,67 @@ class Scene:
         return results
 
     # ------------------------------------------------------------------
+    # Editor-only data
+    # ------------------------------------------------------------------
+
+    @property
+    def group_objects(self) -> dict[str, str]:
+        """Declared editor group objects as {guid: name}.
+
+        These live in <editor_data><group_objects> and are read only by the
+        Modding Kit editor; the runtime ignores them.
+        """
+        return {
+            g.get("guid", ""): g.get("name", "")
+            for g in self._root.iter("group_object")
+        }
+
+    @property
+    def used_group_guids(self) -> set[str]:
+        """Group GUIDs referenced by any entity's <edit_mode_data>."""
+        return {
+            guid
+            for guid in (
+                e.get("group_object_guid") for e in self._root.iter("edit_mode_data")
+            )
+            if guid
+        }
+
+    def add_group_object(self, guid: str, name: str) -> None:
+        """Declare *guid* in <editor_data><group_objects>; no-op if present.
+
+        An <edit_mode_data> GUID that is not declared here makes the editor
+        dereference a null group on scene load and crash (0xc0000005 in
+        TaleWorlds.Native.dll), while the scene still plays fine in-game.
+        """
+        if guid in self.group_objects:
+            return
+
+        editor_data = self._root.find("editor_data")
+        if editor_data is None:
+            editor_data = ET.Element("editor_data")
+            editor_data.tail = "\n\t"
+            # Vanilla places <editor_data> immediately after <terrain>.
+            terrain = self._root.find("terrain")
+            children = list(self._root)
+            idx = children.index(terrain) + 1 if terrain is not None else len(children)
+            self._root.insert(idx, editor_data)
+
+        groups = editor_data.find("group_objects")
+        if groups is None:
+            editor_data.text = "\n\t\t"
+            groups = ET.SubElement(editor_data, "group_objects")
+            groups.tail = "\n\t"
+
+        existing = list(groups)
+        if existing:
+            existing[-1].tail = "\n\t\t\t"
+        else:
+            groups.text = "\n\t\t\t"
+        elem = ET.SubElement(groups, "group_object", name=name, guid=guid)
+        elem.tail = "\n\t\t"
+
+    # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
 

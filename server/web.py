@@ -86,7 +86,8 @@ def api_load(req: LoadReq):
 
 
 def _info(sess):
-    info = {"scene_dir": sess.scene_dir, "dirty": sess.dirty, "navmesh": sess.mesh.stats()}
+    info = {"scene_dir": sess.scene_dir, "dirty": sess.dirty, "navmesh": sess.mesh.stats(),
+            "navmesh_validation": diagnostics.validate_topology(sess.mesh, include_errors=False)}
     if sess.params:
         info["terrain"] = {
             "world_size_x": sess.params.world_size_x,
@@ -132,6 +133,12 @@ def api_inspect_region(min_x: float, min_y: float, max_x: float, max_y: float,
 @app.get("/api/navmesh/probe-point")
 def api_probe_point(x: float, y: float):
     return diagnostics.probe_point(_sess(), x, y)
+
+
+@app.get("/api/navmesh/validate")
+def api_validate_navmesh():
+    """Return every tri/quad and isolated error plus high-degree warnings."""
+    return diagnostics.validate_navmesh(_sess())
 
 
 @app.get("/api/terrain")

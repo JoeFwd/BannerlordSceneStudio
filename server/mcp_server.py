@@ -44,6 +44,8 @@ def _scene_info() -> dict:
             "heightmap_shape": list(sess.heights.shape),
         }
     info["navmesh"] = sess.mesh.stats()
+    info["navmesh_validation"] = diagnostics.validate_topology(
+        sess.mesh, include_errors=False)
     return info
 
 
@@ -83,6 +85,14 @@ def probe_navmesh_point(x: float, y: float) -> dict:
     vertices and all g1-g6 attributes. Read-only file diagnostic, not a native
     editor query. Includes working/disk identity to reveal stale Studio state."""
     return diagnostics.probe_point(state.current(), x, y)
+
+
+@mcp.tool
+def validate_navmesh() -> dict:
+    """Validate the working mesh. Returns every non-triangle/quad face, every
+    vertex with more than four unique incident face-boundary edges (including
+    vertex ID and degree), and every degree-zero/unreferenced vertex."""
+    return diagnostics.validate_navmesh(state.current())
 
 
 @mcp.tool

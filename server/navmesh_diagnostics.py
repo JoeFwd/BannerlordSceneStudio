@@ -11,6 +11,80 @@ from pathlib import Path
 from blnav import rnm1
 
 
+def validate_topology(mesh, include_errors=True):
+    """Validate native face sizes and report high-degree topology smells.
+
+    Degree is computed from unique, canonical face-boundary edges rather than
+    trusting the serialized edge table, which may be stale while the mesh is
+    being edited. Shared face edges therefore contribute once at each endpoint.
+
+    A degree above four is only a warning: official Sandbox and NavalDLC maps
+    contain thousands of such vertices, commonly where triangles meet. Invalid
+    face arity and vertices unused by every face remain errors.
+    """
+    invalid_faces = [
+        {"face_index": face_index, "vertex_count": len(face.vertex_ids)}
+        for face_index, face in enumerate(mesh.faces)
+        if len(face.vertex_ids) not in (3, 4)
+    ]
+
+    referenced_vertices = {
+        vertex_id
+        for face in mesh.faces
+        for vertex_id in face.vertex_ids
+        if 0 <= vertex_id < len(mesh.vertices)
+    }
+    boundary_edges = {
+        (min(first, second), max(first, second))
+        for face in mesh.faces
+        for first, second in zip(
+            face.vertex_ids, face.vertex_ids[1:] + face.vertex_ids[:1]
+        )
+        if 0 <= first < len(mesh.vertices) and 0 <= second < len(mesh.vertices)
+    }
+    degrees = [0] * len(mesh.vertices)
+    for first, second in boundary_edges:
+        degrees[first] += 1
+        if second != first:
+            degrees[second] += 1
+
+    over_connected = [
+        {"vertex_id": vertex_id, "degree": degree}
+        for vertex_id, degree in enumerate(degrees)
+        if degree > 4
+    ]
+    isolated = [
+        {"vertex_id": vertex_id, "degree": degree}
+        for vertex_id, degree in enumerate(degrees)
+        if degree == 0 or vertex_id not in referenced_vertices
+    ]
+    result = {
+        "passed": not invalid_faces and not isolated,
+        "error_count": len(invalid_faces) + len(isolated),
+        "warning_count": len(over_connected),
+        "invalid_triangle_or_quad_face_count": len(invalid_faces),
+        "over_connected_vertex_count": len(over_connected),
+        "isolated_vertex_count": len(isolated),
+        "degree_definition": "unique canonical face-boundary edges incident to the vertex",
+        "maximum_vertex_degree": 4,
+    }
+    if include_errors:
+        result.update({
+            "invalid_triangle_or_quad_faces": invalid_faces,
+            "high_degree_vertices": over_connected,
+            "isolated_vertices": isolated,
+        })
+    return result
+
+
+def validate_navmesh(sess, include_errors=True):
+    """Validate the current working navmesh and include its file identity."""
+    return {
+        "identity": mesh_identity(sess),
+        **validate_topology(sess.mesh, include_errors=include_errors),
+    }
+
+
 def _contains(points, x, y):
     inside = False
     for a, b in zip(points, points[1:] + points[:1]):

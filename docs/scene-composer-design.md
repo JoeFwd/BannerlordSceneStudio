@@ -20,9 +20,21 @@ Formats verified identical to the v1.2 files used in the initial recon
   schema as scenes. Scenes reference them by name; engine resolves across active modules.
 - `terrain.bin`: ZGR6 container (see `blnav/terrain.py`), 5 sections MIDX/HGHT/NRML/WGHT/PHYM,
   LZ4 raw streams; HGHT = 129x129 16-bit PNG nodes, 1px overlap.
-- `SceneEditData/<scene>/terrain_ed.bin`: editor-only source data; NOT required at runtime
-  (runtime reads SceneObj only). Composer may skip it (scene won't be terrain-editable in
-  the official editor until we also write it — acceptable v1 limitation, verify in-game).
+- `SceneEditData/<scene>/terrain_ed.bin`: editor-only source data, magic `OK01` — an encoding
+  unrelated to ZGR6. NOT required at runtime (runtime reads SceneObj only), so the composer
+  skips it. **The v1 limitation is worse than "not terrain-editable"** (confirmed 2026-08-17 on
+  `dadg_joust_v3`): the editor renders `terrain_ed.bin`, so it shows the *donor* terrain rather
+  than the generated one, and **saving terrain in the editor rebuilds `terrain.bin` from
+  `terrain_ed.bin`, destroying the generated terrain**. Back up `terrain.bin` before opening a
+  composed scene in the Modding Kit. A ZGR6→OK01 converter is the real fix (see Open questions).
+- `scene.xscene` carries editor-only nodes the runtime ignores entirely: `<editor_data>`
+  (including `<group_objects>`) and per-entity `<edit_mode_data>`. **Invariant: every
+  `edit_mode_data/@group_object_guid` must be declared in `editor_data/group_objects`.** An
+  orphan GUID → null group lookup → `0xc0000005` AV in `TaleWorlds.Native.dll` on editor load,
+  with the scene still playing fine in-game. `copy_entities` from multiple donors is the
+  trigger: `edit_mode_data` travels with the copied subtree, but `<editor_data>` is one
+  top-level node that gets overwritten by a single donor's copy instead of unioned.
+  See `docs/scene-authoring-reference.md` for the validation snippet and byte-level edit notes.
 - `flora.bin` empty stub = `FLR2` `04 00 00 00` `00 00 00 00` (12 bytes, Coventry ships this).
 - `references.txt`: first line = count, then `mesh <name>` lines (asset preload manifest).
   Generate from the meshes of placed prefabs (walk prefab XML meta_mesh_components).
@@ -66,7 +78,12 @@ Formats verified identical to the v1.2 files used in the initial recon
      terrain node) or `SceneBuilder.from_scene(path)` to clone an existing scene.
    - `.set_terrain(heights, node_size, ...)` → terrain node attrs + terrain.bin
    - `.add(prefab, pos, rot, levels=...)` with PrefabCatalog validation
-   - `.copy_entities(src_scene, filter)` — reuse chunks of existing scenes
+   - `.copy_entities(src_scene, filter)` — reuse chunks of existing scenes. **(done 2026-08-18)**
+     Unions the source scene's `editor_data/group_objects` entries for any `group_object_guid`
+     carried in on the copied `edit_mode_data`, and drops GUIDs the source itself never declared;
+     leaving one orphaned crashes the editor. Backed by `Scene.group_objects` /
+     `Scene.used_group_guids` / `Scene.add_group_object` in `blscene/xscene.py`.
+   - `.build()` raises `ValueError` unless `used_group_guids ⊆ declared_group_guids` **(done)** before writing
    - `.build(out_dir)` → SceneObj/<name>/ with scene.xscene, terrain.bin, flora.bin,
      atmosphere.xml, references.txt, navmesh.bin (via blnav.generate on the heightmap,
      then per-spawn-point coverage check)
@@ -77,7 +94,59 @@ Formats verified identical to the v1.2 files used in the initial recon
 
 ## Open questions
 
-- Does a scene without SceneEditData/terrain_ed.bin load fine at runtime? (expected yes)
+- ~~Does a scene without SceneEditData/terrain_ed.bin load fine at runtime?~~ **Answered
+  2026-08-17: yes at runtime, but the editor then shows donor/absent terrain and overwrites
+  `terrain.bin` on save.**
+
+  Follow-up — **writing `terrain_ed.bin`.** The `OK01` container **and payload** are now
+  decoded (2026-08-18, see README): normals, heights and per-layer weights, validated on
+  all 108 scenes in this install by exact payload consumption plus a height cross-check
+  against the compiled `ZGR6`. Two channels remain unidentified — `blockB` (all-zero in
+  104/108 scenes) and what distinguishes the four per-node layer masks — but neither
+  blocks path 1 or path 2 below, since both are read straight out of a donor/compiled file.
+
+  **Authoring direction (decided 2026-08-18): generate `OK01` first, compile `ZGR6` from it.**
+  `OK01` is the editor source and `ZGR6` the compiled output, so a composer that writes only
+  the runtime file produces a scene nobody can subsequently open and hand-tune — the
+  `dadg_joust_v3` case. Writing the source and compiling down keeps the two halves consistent
+  by construction and matches how the official editor works.
+
+  Measured scope of the problem (2026-08-18, this install):
+
+  ```
+  SceneObj scenes shipping terrain.bin : 494
+    ...with a matching terrain_ed.bin  : 102
+    ...WITHOUT (editor-blind)          : 392  (79%)
+      SandBoxCore 196 | SandBox 128 | Native 63 | StoryMode 4
+  ```
+
+  So **79% of terrain-bearing vanilla scenes ship compiled-only** and cannot be opened for
+  terrain editing at all. Three paths, in increasing scope:
+
+  1. **Patch a donor `terrain_ed.bin` in place. DONE 2026-08-18** — applies to the 102 scenes
+     that have one, and to composed scenes that seeded theirs from a donor: every channel we are
+     *not* editing is already correct and correctly sized, so only the height and layer-weight
+     arrays need overwriting. Proven end-to-end on `dadg_joust_v3`, whose terrain work existed
+     only in the compiled file: the compiled heights (nodes 27/28) and layer weights (nodes
+     22/28, layers 2/4/5/7/9/10/13) were folded back into `terrain_ed.bin`, which now agrees with
+     `terrain.bin` everywhere to within the quantisation band. Patch only the vertices that
+     actually *differ* (>3 quantisation steps of height, >4/255 of weight) so untouched vertices
+     keep full editor f32 precision instead of being round-tripped through the compiled file's
+     u16/u8. Recompute normals at the changed vertices (see README). Original kept as
+     `terrain_ed.bin.orig`.
+  2. **`ZGR6 → OK01` decompiler.** The only option for the 392 editor-blind vanilla scenes —
+     high value, since it makes native/sandbox terrain editable for the first time. Lossy by
+     nature: `ZGR6` does not carry the channels the compile step discards (debris, flowmap,
+     vegetation, bedrock), so those get defaulted. Acceptable — the runtime demonstrably does
+     not need them, and the alternative is no editor terrain at all. Document the lossiness
+     rather than pretending to round-trip: reconstructed files are for *editing forward*, not
+     for recovering the original artist's source.
+  3. **From-scratch writer**, for composer-generated terrain. Needs the full channel list.
+     Superset of (2) — build (2) first and extend.
+
+  Acceptance test for all three: open in the Modding Kit, confirm the editor renders the
+  expected terrain, save, and confirm the regenerated `terrain.bin` still matches the
+  composer's / original's output.
 - Is references.txt required or advisory? (test by omitting on a copy)
 - prt_data.bin (light probes, Coventry 51 MB) — vlandia_town_c has none... verify which
   scenes need it; likely optional (probe fallback).

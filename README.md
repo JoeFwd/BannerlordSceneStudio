@@ -16,7 +16,7 @@ navmesh from a scene (`scene.xscene` + `terrain.bin`).
 | 0x10 | u64 | uncompressed payload size |
 | 0x18 | u64 | file_size − 8 |
 | 0x20 | 16 B | runtime pointer garbage (ignored) |
-| 0x30 | … | **LZ4 raw block stream** → NMG9 payload |
+| 0x30 | … | **LZ4 raw block stream** → NMG8 or NMG9 scene payload |
 
 ### NMG9 payload
 
@@ -32,6 +32,12 @@ u32 32; 256 × 0x00          reserved footer
 
 Every edge is referenced by exactly 1 (boundary) or 2 (interior) faces.
 
+Older **NMG8 scene payloads** use the same polygon layout and footer, but start
+with `'NMG8'` and have 20-byte edges (omit the final `u32 0`). `blnav.nmg9.NavMesh`
+and the Studio loader detect both versions automatically. Saving preserves the
+loaded version and raw face fields; newly created meshes default to NMG9.
+Unsupported edge fields and nonzero NMG9 edge flags are rejected.
+
 ### terrain.bin — `ZGR6` container
 
 5 LZ4 sections (`MIDX HGHT NRML WGHT PHYM`) with per-node offset tables.
@@ -41,6 +47,99 @@ u16 → world height via `<terrain min_height max_height>` in `scene.xscene`.
 ### NMG8 — navmesh prefab (`Scene.ImportNavigationMeshPrefab`)
 
 `u32 size−4; 'NMG8'; u32 nv; nv×xyz; u32 nt; nt×3×u32`.
+This uncompressed, size-prefixed triangle format remains handled by `blnav.nmg8`;
+it is distinct from an RNM1-compressed NMG8 polygon scene mesh.
+
+### terrain_ed.bin — `OK01` container (editor terrain source, container decoded)
+
+`SceneEditData/<scene>/terrain_ed.bin`. Same container family as `RNM1`; the
+existing `blnav.lz4raw.decompress_prefix` reads it as-is.
+
+| offset | type | meaning |
+|--------|------|---------|
+| 0x00 | `'OK01'` | magic |
+| 0x04 | u32 | file_size − 12 |
+| 0x08 | u32 | 0 |
+| 0x0C | u32 | version = 2 |
+| 0x10 | u32 | 0 |
+| 0x14 | u64 | uncompressed payload size |
+| 0x1C | u64 | file_size − 12 (repeat of 0x04) |
+| 0x24 | 16 B | runtime pointer garbage (ignored) |
+| 0x34 | … | **LZ4 raw block stream** → payload |
+
+Verified across 108 shipped + DADG scenes: decompression consumes exactly the
+declared byte count and yields exactly the declared size.
+
+Payload (decoded 2026-08-18; the earlier "non-constant stride" reading was wrong —
+the stride varies because the per-node layer *count* varies):
+
+```
+u32 node_dim_x, node_dim_y     ← match <terrain node_dimension_x/y> in scene.xscene
+
+node_dim_x × node_dim_y nodes, walked COLUMN-major: (0,0) (0,1) … (0,dimy−1) (1,0) …
+  u32 node_x, node_y
+  u32 mask[4]                  layer-usage bitmasks (see below)
+  u32 res_x, res_y             per-node vertex resolution (5 / 33 / 65 / 129 / 257 / 513)
+  f32 normals[N][4]            x, y, z, pad — unit length;  N = res_x × res_y
+  u32 res_x, res_y             repeated header for the next block
+  f32 blockB[N]                all-zero in 104 of 108 scenes (meaning TBD)
+  u32 layer_res[32]            16 × (res_x, res_y) palette slot table, (0,0) = unused slot
+  f32 heights[N]               world-space metres
+  u32 nlayers
+  nlayers × { u32 layer_index; f32 weights[N] }     layer_index is 1-based
+```
+
+Verified on all 108 scenes here: the walk consumes the payload **exactly**, with no
+trailing bytes, and `heights` matches the `ZGR6` `HGHT` PNGs to within one
+quantisation step ((max−min)/65535).
+
+Two orientation traps, both confirmed against `ZGR6`:
+
+- **Vertex order is transposed.** `heights`/`weights` are `[res_x][res_y]`; the `ZGR6`
+  PNG for the same node is the transpose. Reshape `(res_x, res_y)` then `.T`.
+- **Node order is transposed too.** `OK01` walks nodes column-major; `ZGR6`'s per-node
+  offset tables are indexed row-major. `zgr6_index = node_y × node_dim_x + node_x`.
+
+`mask[4]` is **four independent per-node layer bitmasks, not four copies** — they are
+equal in only 60 of 108 scenes. The set of stored weight planes is their **union**:
+`layer_index == bit + 1` over `mask[0]|mask[1]|mask[2]|mask[3]`. Zero counter-examples
+across all 108 scenes / 6 500+ nodes. (What distinguishes the four masks from each other
+is still open; the union is what governs the payload layout.)
+
+`layer_res[32]` is a fixed **16-slot palette capacity table**, not a per-scene layer list:
+slots are filled contiguously from slot 0 and hold that node's resolution, but the filled
+count is 16 in 101 of 108 scenes regardless of how many layers the scene declares, so it
+does **not** equal the `<layers>` count. `layer_index` indexes this palette 1-based, and
+the palette is **sparse** — `dadg_joust_v3` declares 15 layers named `1_base`,
+`2_grass_flora`, `14_wet_flora`, … in scrambled document order, and the name prefix, not
+the document position, is the `layer_index`.
+
+The compiled `WGHT` section mirrors this: each node is 16 palette slots of
+`u32 count` followed by `count × (u32 png_len; PNG)` (8-bit greyscale), `count = 0`
+for an unpainted layer. `HGHT`/`NRML` nodes are instead a single `u32 png_len; PNG`
+(16-bit greyscale / 8-bit RGBA).
+
+Writing `OK01` back is straightforward: re-LZ4 the payload and re-emit the 0x34
+header (`sz1 == sz2 == file_size − 12`, holds on all 108 scenes; the 16 pointer
+bytes are ignored, zeros are fine). `lz4.block` round-trips the payload
+byte-identically; `mode="high_compression", compression=12` lands at ~94% of
+TaleWorlds' own file size.
+
+Normals are **derivable from heights** — `normalize(-dh/dx, -dh/dy, 1)` by central
+differences, with vertex spacing `node_size / (res − 1)`. It is not the engine's
+exact filter (max deviation 0.29 on 40°+ slopes) but it is accurate where it
+matters: 0.0054 max on flat ground, 0.0003 mean on gentle terrain. Recompute only
+at vertices whose height you changed. The `ZGR6` `NRML` PNG is *not* a usable
+source for this — red/green are x/y as `(c/255)·2−1`, but blue is not z. The
+4th f32 of each `OK01` normal is uninitialised padding (`inf` in places) — copy it
+through, never read it.
+
+`OK01` is the editor *source* and carries more channels than the compiled `ZGR6`
+runtime terrain, so `ZGR6 → OK01` is a **lossy decompile**, not a round trip — the
+discarded channels get defaulted. Worth building anyway: **392 of 494 (79%) of
+terrain-bearing vanilla scenes ship compiled-only**, with no `terrain_ed.bin` at all,
+so a decompiler is the only way to open native/sandbox terrain in the editor.
+See `docs/scene-composer-design.md` for the staged plan.
 
 ## Layout
 
@@ -75,6 +174,7 @@ save back to `navmesh.bin` (first save keeps a `.bak`).
 
 Tools: `load_scene`, `scene_info`, `sample_height`, `query_faces`,
 `generate_navmesh`, `add_face`, `delete_faces`, `set_face_attributes`,
+`validate_navmesh`,
 `move_vertex`, `snap_to_terrain`, `save_navmesh`, `export_obj`.
 
 Typical LLM flow: `load_scene(dir)` → `generate_navmesh(cell_size=4, max_slope_deg=40)`
@@ -84,6 +184,7 @@ Typical LLM flow: `load_scene(dir)` → `generate_navmesh(cell_size=4, max_slope
 
 ```
 python tests/test_roundtrip.py       # byte-identical NMG9 re-serialization + LZ4 re-encode
+python tests/test_scene_formats.py   # synthetic NMG8/NMG9 parsing, validation, load/save
 python tests/test_terrain.py         # all 5 terrain sections, heightmap assembly
 python tests/test_crossvalidate.py   # navmesh vertices vs terrain surface heights
 python tests/test_generate.py        # generator winding/topology vs vanilla
