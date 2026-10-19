@@ -139,13 +139,14 @@ runtime terrain, so `ZGR6 → OK01` is a **lossy decompile**, not a round trip �
 discarded channels get defaulted. Worth building anyway: **392 of 494 (79%) of
 terrain-bearing vanilla scenes ship compiled-only**, with no `terrain_ed.bin` at all,
 so a decompiler is the only way to open native/sandbox terrain in the editor.
-See `docs/scene-composer-design.md` for the staged plan.
 
 ## Layout
 
 - `blnav/` — core library (`rnm1`, `nmg9`, `nmg8`, `terrain`, `xscene`, `lz4raw`, `generate`)
 - `server/` — MCP server (`mcp_server.py`) + web GUI (`web.py`, `static/index.html`)
 - `tests/` — validation against `empire_town_s`, vanilla `Main_map` and DADG `Main_map`
+
+The experimental scene composer and corpus code lives on the `scene-generation` branch.
 
 ## Web GUI
 
